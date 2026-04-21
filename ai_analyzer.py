@@ -229,142 +229,50 @@ def _gemini_analyze(client, image_base64, merged_detections, img_w, img_h):
 
 def detect_and_analyze(image_base64, img_width, img_height):
     """
-    نظام الكشف والتحليل الإنشائي للشقوق (نسخة Gemini النظيفة):
-    1. Gemini (gemini-1.5-pro) -> استخراج مربعات التحديد بدقة عالية.
-    2. معالجة الإحداثيات -> تحويل إحداثيات Gemini لتناسب أبعاد الصورة.
-    3. Gemini Expert Analysis -> تقديم تقرير هندسي إنشائي مفصل باللغة العربية.
+    نسخة نظيفة 100% تعتمد على Gemini وتتجاوز أخطاء المسافات.
     """
-    # تم إيقاف OpenAI لضمان استقرار النظام والاعتماد كلياً على Gemini
     gemini_client = get_gemini_client()
 
-    # Step 1: Parallel detection by both models
-    gemini_result = {"detected": [], "total": 0}
-
+    # الخطوة 1: الكشف عن الشقوق
     try:
         gemini_result = _gemini_detect(gemini_client, image_base64)
-    except Exception as e:
-        gemini_result = {"detected": [], "total": 0, "_error": str(e)}
+    except Exception:
+        gemini_result = {"detected": []}
 
+    # الخطوة 2: معالجة النتائج
     final_detections = []
     raw_boxes = gemini_result.get("detected", [])
-
-    for b in raw_boxes:
-        # التأكد من وجود مفتاح bbox
-        bbox = b.get("bbox", b)
-        
-        # استخراج القيم بشكل آمن
-        det = {
-            "bbox": {
-                "x": float(bbox.get("x", 0)),
-                "y": float(bbox.get("y", 0)),
-                "width": float(bbox.get("width", 0)),
-                "height": float(bbox.get("height", 0))
-            },
-            "rough_type": b.get("rough_type", "شرخ"),
-            "rough_severity": b.get("rough_severity", "MEDIUM")
-        }
-        final_detections.append(det)
-    # Step 2: Ensemble merge
-   final_detections = []
-    gemini_boxes = gemini_result.get("detected", [])
     
-    for i, det in enumerate(gemini_boxes):
+    for i, det in enumerate(raw_boxes):
         bbox = det.get("bbox", det)
+        # توحيد الإحداثيات
+        x = max(0.0, min(0.98, float(bbox.get("x", 0))))
+        y = max(0.0, min(0.98, float(bbox.get("y", 0))))
+        w = max(0.02, min(1.0 - x, float(bbox.get("width", 0.05))))
+        h = max(0.02, min(1.0 - y, float(bbox.get("height", 0.05))))
         
-        try:
-            x = float(bbox.get("x", 0))
-            y = float(bbox.get("y", 0))
-            w = float(bbox.get("width", 0))
-            h = float(bbox.get("height", 0))
-            
-            if x > 1 or w > 1:
-                x /= 1000; y /= 1000; w /= 1000; h /= 1000
+        final_detections.append({
+            "id": i + 1,
+            "bbox": {"x": x, "y": y, "width": w, "height": h},
+            "type": det.get("type", "شرخ"),
+            "severity": det.get("severity", "MEDIUM")
+        })
 
-            clean_det = {
-                "id": i + 1,
-                "bbox": {"x": x, "y": y, "width": w, "height": h},
-                "type": det.get("type", det.get("rough_type", "شرخ")),
-                "severity": det.get("severity", det.get("rough_severity", "MEDIUM"))
-            }
-            final_detections.append(clean_det)
-        except Exception:
-            continue
-
-    total_detected = len(final_detections)
-    # Step 3: التعامل مع حالة عدم وجود شقوق
-    if total_detected == 0:
-        # استخراج نوع السطح من نتيجة جيمناي فقط
-        surface = gemini_result.get("surface_visible", "إسفلت/خرسانة")
-        
+    # الخطوة 3: التحليل في حال عدم وجود شقوق
+    if not final_detections:
         return {
             "total_cracks_detected": 0,
-            "summary": "لم يتم الكشف عن أي شروخ أو شقوق واضحة في هذه الصورة. السطح يظهر حالة مستقرة ظاهرياً.",
+            "summary": "السطح سليم ولا توجد شقوق واضحة.",
             "overall_severity": "LOW",
-            "overall_confidence": 95,
-            "material_type": surface,
-            "surface_condition": "سليم - لا توجد عيوب إنشائية مرئية",
-            "environmental_factors": "غير محددة",
             "cracks": [],
-            "recommendations": [
-                {
-                    "priority": 1,
-                    "action": "المراقبة الدورية",
-                    "timeline": "كل 6-12 شهراً",
-                    "estimated_cost_level": "منخفض",
-                    "details": "الحفاظ على برنامج الفحص البصري الدوري لضمان عدم تطور عيوب مستقبلية."
-                }
-            ],
-            "monitoring_plan": "إعادة الفحص في الموسم القادم",
-            "professional_consultation_required": False,
-            "notes": "التحليل تم بواسطة نظام الذكاء الاصطناعي بناءً على الصورة المرفقة.",
-            "_detection_info": {
-                "gemini_detected": len(gemini_boxes),
-                "status": "Gemini Only Mode"
-            }
+            "recommendations": [{"priority": 1, "action": "فحص دوري", "timeline": "6 أشهر"}]
         }
+
+    # الخطوة 4: التحليل الهندسي المفصل
     analysis = _gemini_analyze(gemini_client, image_base64, final_detections, img_width, img_height)
-
-    # Inject ensemble metadata
-    analysis["total_cracks_detected"] = total_detected
-    analysis["_detection_info"] = {
-        "gemini_detected": len(gemini_boxes),
-       "gpt_detected": 0,
-        "merged_total": total_detected,
-       "dual_confirmed": 0
-    }
-
-    # Ensure crack list matches detections and bboxes are preserved
-    if "cracks" in analysis and analysis["cracks"]:
-        for i, crack in enumerate(analysis["cracks"]):
-            if i < len(final_detections):
-                crack["bbox"] = final_detections[i]["bbox"]
-                crack["dual_confirmed"] = final_detections[i].get("_dual_confirmed", False)
-            crack["id"] = i + 1
-    else:
-        # Build crack list from detections if analysis failed to produce them
-        analysis["cracks"] = []
-        for det in final_detections:
-            analysis["cracks"].append({
-                "id": det["id"],
-                "bbox": det["bbox"],
-                "type": det.get("rough_type", "شرخ"),
-                "category": "structural",
-                "is_structural": True,
-                "estimated_width_mm": "غير محدد",
-                "estimated_length_cm": "غير محدد",
-                "depth_assessment": "غير محدد",
-                "severity": det.get("rough_severity", "MEDIUM"),
-                "confidence": int(det.get("_conf", 0.7) * 100),
-                "dual_confirmed": det.get("_dual_confirmed", False),
-                "description": "تم الكشف عن هذا الشرخ بواسطة نظام الرؤية الذكية",
-                "cause_analysis": "يتطلب فحصاً ميدانياً لتحديد السبب",
-                "progression_risk": "متوسط",
-                "immediate_action": "فحص ميداني"
-            })
-
+    analysis["total_cracks_detected"] = len(final_detections)
+    
     return analysis
-
-
 def generate_dashboard_recommendations(records_summary):
     openai_client = get_openai_client()
 
