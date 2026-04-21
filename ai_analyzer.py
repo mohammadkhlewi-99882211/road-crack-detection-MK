@@ -229,88 +229,99 @@ def _gemini_analyze(client, image_base64, merged_detections, img_w, img_h):
 
 def detect_and_analyze(image_base64, img_width, img_height):
     """
-    Dual-model crack detection and analysis:
-    1. Gemini (gemini-1.5-pro) → precise bounding boxes
-    2. GPT-5.2 → second-opinion bounding boxes
-    3. Ensemble merge (IoU-based) → highest-quality combined detections
-    4. GPT-5.2 → expert structural analysis (with Gemini fallback)
+    نظام الكشف والتحليل الإنشائي للشقوق (نسخة Gemini النظيفة):
+    1. Gemini (gemini-1.5-pro) -> استخراج مربعات التحديد بدقة عالية.
+    2. معالجة الإحداثيات -> تحويل إحداثيات Gemini لتناسب أبعاد الصورة.
+    3. Gemini Expert Analysis -> تقديم تقرير هندسي إنشائي مفصل باللغة العربية.
     """
-    #openai_client = get_openai_client()
+    # تم إيقاف OpenAI لضمان استقرار النظام والاعتماد كلياً على Gemini
     gemini_client = get_gemini_client()
 
     # Step 1: Parallel detection by both models
     gemini_result = {"detected": [], "total": 0}
-    gpt_result = {"detected": [], "total": 0}
 
     try:
         gemini_result = _gemini_detect(gemini_client, image_base64)
     except Exception as e:
         gemini_result = {"detected": [], "total": 0, "_error": str(e)}
 
-   # try:
-       # gpt_result = _gpt_detect(openai_client, image_base64)
-    #except Exception as e:
-      #  gpt_result = {"detected": [], "total": 0, "_error": str(e)}
-
-    gemini_boxes = gemini_result.get("detected", [])
-    gpt_boxes = []
-    # Normalize bbox keys
-    for b in gemini_boxes + gpt_boxes:
-        if "bbox" not in b:
-            b["bbox"] = {
-                "x": b.pop("x", 0),
-                "y": b.pop("y", 0),
-                "width": b.pop("width", 0),
-                "height": b.pop("height", 0)
-            }
-
-    # Step 2: Ensemble merge
-    merged = gemini_result.get("detected", [])
-    # Re-number and clip boxes
     final_detections = []
-    for i, det in enumerate(merged):
-        bbox = det.get("bbox", {})
-        x = max(0.0, min(0.98, float(bbox.get("x", 0))))
-        y = max(0.0, min(0.98, float(bbox.get("y", 0))))
-        w = max(0.02, min(1.0 - x, float(bbox.get("width", 0.05))))
-        h = max(0.02, min(1.0 - y, float(bbox.get("height", 0.05))))
-        det["bbox"] = {"x": x, "y": y, "width": w, "height": h}
-        det["id"] = i + 1
+    raw_boxes = gemini_result.get("detected", [])
+
+    for b in raw_boxes:
+        # التأكد من وجود مفتاح bbox
+        bbox = b.get("bbox", b)
+        
+        # استخراج القيم بشكل آمن
+        det = {
+            "bbox": {
+                "x": float(bbox.get("x", 0)),
+                "y": float(bbox.get("y", 0)),
+                "width": float(bbox.get("width", 0)),
+                "height": float(bbox.get("height", 0))
+            },
+            "rough_type": b.get("rough_type", "شرخ"),
+            "rough_severity": b.get("rough_severity", "MEDIUM")
+        }
         final_detections.append(det)
+    # Step 2: Ensemble merge
+   final_detections = []
+    gemini_boxes = gemini_result.get("detected", [])
+    
+    for i, det in enumerate(gemini_boxes):
+        bbox = det.get("bbox", det)
+        
+        try:
+            x = float(bbox.get("x", 0))
+            y = float(bbox.get("y", 0))
+            w = float(bbox.get("width", 0))
+            h = float(bbox.get("height", 0))
+            
+            if x > 1 or w > 1:
+                x /= 1000; y /= 1000; w /= 1000; h /= 1000
+
+            clean_det = {
+                "id": i + 1,
+                "bbox": {"x": x, "y": y, "width": w, "height": h},
+                "type": det.get("type", det.get("rough_type", "شرخ")),
+                "severity": det.get("severity", det.get("rough_severity", "MEDIUM"))
+            }
+            final_detections.append(clean_det)
+        except Exception:
+            continue
 
     total_detected = len(final_detections)
-
-    # Step 3: Detailed analysis using merged detections
+    # Step 3: التعامل مع حالة عدم وجود شقوق
     if total_detected == 0:
-        surface = gemini_result.get("surface_visible", gpt_result.get("surface_visible", "غير محدد"))
+        # استخراج نوع السطح من نتيجة جيمناي فقط
+        surface = gemini_result.get("surface_visible", "إسفلت/خرسانة")
+        
         return {
             "total_cracks_detected": 0,
-            "summary": "لم يتم الكشف عن أي شروخ أو شقوق في هذه الصورة. السطح يبدو بحالة جيدة.",
+            "summary": "لم يتم الكشف عن أي شروخ أو شقوق واضحة في هذه الصورة. السطح يظهر حالة مستقرة ظاهرياً.",
             "overall_severity": "LOW",
-            "overall_confidence": 90,
+            "overall_confidence": 95,
             "material_type": surface,
-            "surface_condition": "السطح في حالة جيدة بدون شروخ مرئية",
-            "environmental_factors": "",
+            "surface_condition": "سليم - لا توجد عيوب إنشائية مرئية",
+            "environmental_factors": "غير محددة",
             "cracks": [],
             "recommendations": [
                 {
                     "priority": 1,
-                    "action": "الصيانة الوقائية الدورية",
+                    "action": "المراقبة الدورية",
                     "timeline": "كل 6-12 شهراً",
                     "estimated_cost_level": "منخفض",
-                    "details": "قم بإجراء فحص دوري للحفاظ على الحالة الجيدة للسطح"
+                    "details": "الحفاظ على برنامج الفحص البصري الدوري لضمان عدم تطور عيوب مستقبلية."
                 }
             ],
-            "monitoring_plan": "فحص بصري كل 6 أشهر",
+            "monitoring_plan": "إعادة الفحص في الموسم القادم",
             "professional_consultation_required": False,
-            "notes": "",
+            "notes": "التحليل تم بواسطة نظام الذكاء الاصطناعي بناءً على الصورة المرفقة.",
             "_detection_info": {
                 "gemini_detected": len(gemini_boxes),
-                "gpt_detected": len(gpt_boxes),
-                "merged": 0
+                "status": "Gemini Only Mode"
             }
         }
-
     analysis = _gemini_analyze(gemini_client, image_base64, final_detections, img_width, img_height)
 
     # Inject ensemble metadata
