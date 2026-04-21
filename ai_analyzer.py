@@ -399,7 +399,7 @@ def detect_and_analyze(image_base64, img_width, img_height):
             }
 
     # Step 2: Ensemble merge
-        merged = gemini_boxes
+        merged = gemini_result.get("detected", [])
     # Re-number and clip boxes
     final_detections = []
     for i, det in enumerate(merged):
