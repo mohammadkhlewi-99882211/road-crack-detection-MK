@@ -194,13 +194,21 @@ Respond ONLY with valid JSON in Arabic for text fields."""
 
 
 def _gemini_detect(client, image_base64):
-    """استخدام جيمناي للكشف عن التصدعات وتحديد مواقعها"""
+    """استخدام جيمناي مع تنظيف الرد لضمان القراءة"""
     try:
         image_parts = [{"mime_type": "image/jpeg", "data": base64.b64decode(image_base64)}]
-        full_prompt = DETECTION_SYSTEM + "\n\n" + DETECTION_PROMPT
+        # نطلب منه بوضوح عدم كتابة أي نص خارج الـ JSON
+        full_prompt = DETECTION_SYSTEM + "\n\n" + DETECTION_PROMPT + "\nReturn ONLY valid JSON."
+        
         response = client.generate_content([full_prompt, image_parts[0]])
-        return _parse_json_response(response.text or "") or {"detected": [], "total": 0}
-    except Exception:
+        text_response = response.text
+        
+        # تنظيف الرد من علامات الـ Markdown إذا وجدت
+        clean_json = text_response.replace("```json", "").replace("```", "").strip()
+        
+        return _parse_json_response(clean_json) or {"detected": [], "total": 0}
+    except Exception as e:
+        print(f"Detection Error: {e}")
         return {"detected": [], "total": 0}
 
 def _gpt_detect(client, image_base64):
