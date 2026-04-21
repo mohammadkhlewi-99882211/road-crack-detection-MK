@@ -195,15 +195,15 @@ Respond ONLY with valid JSON in Arabic for text fields."""
 
 def _gemini_detect(client, image_base64):
     """Use Gemini for precise bounding box detection."""
-    image_bytes = base64.b64decode(image_base64)
-    response = client.models.generate_content(
-        model="gemini-2.5-pro",
-        contents=[
-            types.Content(parts=[
-                types.Part(text=DETECTION_SYSTEM + "\n\n" + DETECTION_PROMPT),
-                types.Part(inline_data=types.Blob(
-                    mime_type="image/jpeg",
-                    data=image_bytes
+    image_parts = [
+        {"mime_type": "image/jpeg", "data": base64.b64decode(image_base64)}
+    ]
+    
+    full_prompt = DETECTION_SYSTEM + "\n\n" + DETECTION_PROMPT
+    
+    response = client.generate_content([full_prompt, image_parts[0]])
+    
+    return _parse_json_response(response.text or "") or {"detected": [], "total": 0}
                 ))
             ])
         ],
@@ -253,8 +253,15 @@ def _gpt_analyze(openai_client, gemini_client, image_base64, merged_detections, 
             f"ثقة أولية: {int(d.get('_conf', 0.7)*100)}% | {dual}"
         )
 
-    prompt = f"""These crack regions were pre-detected by dual AI vision systems (Gemini + GPT):
+    prompt = f"""As an expert civil engineer, analyze the following crack regions detected in the road surface:
 {boxes_desc}
+
+Provide a detailed structural integrity report including:
+1. Crack severity (Low/Medium/High).
+2. Probable cause.
+3. Recommended repair action.
+4. Estimated maintenance urgency.
+"""
 
 Image dimensions: {img_w}x{img_h}px
 
@@ -330,17 +337,18 @@ Set dual_confirmed: true for cracks confirmed by both models."""
     except Exception:
         pass
 
-    # Fallback to Gemini for analysis
+   # Fallback to Gemini for analysis
     try:
-        image_bytes = base64.b64decode(image_base64)
-        response = gemini_client.models.generate_content(
-            model="gemini-2.5-pro",
-            contents=[
-                types.Content(parts=[
-                    types.Part(text=ANALYSIS_SYSTEM + "\n\n" + prompt),
-                    types.Part(inline_data=types.Blob(
-                        mime_type="image/jpeg",
-                        data=image_bytes
+        image_parts = [{"mime_type": "image/jpeg", "data": base64.b64decode(image_base64)}]
+        full_prompt = ANALYSIS_SYSTEM + "\n\n" + prompt
+        
+        response = gemini_client.generate_content([full_prompt, image_parts[0]])
+        
+        result = _parse_json_response(response.text or "")
+        if result:
+            return result
+    except Exception as e:
+        print(f"Gemini Analysis Error: {e}")
                     ))
                 ])
             ],
@@ -364,7 +372,7 @@ Set dual_confirmed: true for cracks confirmed by both models."""
 def detect_and_analyze(image_base64, img_width, img_height):
     """
     Dual-model crack detection and analysis:
-    1. Gemini (gemini-2.5-pro) → precise bounding boxes
+    1. Gemini (gemini-1.5-pro) → precise bounding boxes
     2. GPT-5.2 → second-opinion bounding boxes
     3. Ensemble merge (IoU-based) → highest-quality combined detections
     4. GPT-5.2 → expert structural analysis (with Gemini fallback)
