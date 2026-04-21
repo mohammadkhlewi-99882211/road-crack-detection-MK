@@ -369,7 +369,7 @@ def detect_and_analyze(image_base64, img_width, img_height):
     3. Ensemble merge (IoU-based) → highest-quality combined detections
     4. GPT-5.2 → expert structural analysis (with Gemini fallback)
     """
-    openai_client = get_openai_client()
+    #openai_client = get_openai_client()
     gemini_client = get_gemini_client()
 
     # Step 1: Parallel detection by both models
@@ -381,14 +381,13 @@ def detect_and_analyze(image_base64, img_width, img_height):
     except Exception as e:
         gemini_result = {"detected": [], "total": 0, "_error": str(e)}
 
-    try:
-        gpt_result = _gpt_detect(openai_client, image_base64)
-    except Exception as e:
-        gpt_result = {"detected": [], "total": 0, "_error": str(e)}
+   # try:
+       # gpt_result = _gpt_detect(openai_client, image_base64)
+    #except Exception as e:
+      #  gpt_result = {"detected": [], "total": 0, "_error": str(e)}
 
     gemini_boxes = gemini_result.get("detected", [])
-    gpt_boxes = gpt_result.get("detected", [])
-
+    gpt_boxes = []
     # Normalize bbox keys
     for b in gemini_boxes + gpt_boxes:
         if "bbox" not in b:
@@ -400,8 +399,7 @@ def detect_and_analyze(image_base64, img_width, img_height):
             }
 
     # Step 2: Ensemble merge
-    merged = _ensemble_boxes(gemini_boxes, gpt_boxes, iou_threshold=0.2)
-
+   merged = gemini_boxes
     # Re-number and clip boxes
     final_detections = []
     for i, det in enumerate(merged):
@@ -447,15 +445,15 @@ def detect_and_analyze(image_base64, img_width, img_height):
             }
         }
 
-    analysis = _gpt_analyze(openai_client, gemini_client, image_base64, final_detections, img_width, img_height)
+    analysis = _gemini_analyze(gemini_client, image_base64, final_detections, img_width, img_height)
 
     # Inject ensemble metadata
     analysis["total_cracks_detected"] = total_detected
     analysis["_detection_info"] = {
         "gemini_detected": len(gemini_boxes),
-        "gpt_detected": len(gpt_boxes),
+       "gpt_detected": 0,
         "merged_total": total_detected,
-        "dual_confirmed": sum(1 for d in final_detections if d.get("_dual_confirmed", False))
+       "dual_confirmed": 0
     }
 
     # Ensure crack list matches detections and bboxes are preserved
