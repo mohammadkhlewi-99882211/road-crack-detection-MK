@@ -16,9 +16,8 @@ def get_openai_client():
 
 def get_gemini_client():
     api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY is not set")
-    return genai.Client(api_key=api_key)
+    genai.configure(api_key=api_key)
+    return genai.GenerativeModel('gemini-1.5-pro')
 
 
 def _parse_json_response(text):
