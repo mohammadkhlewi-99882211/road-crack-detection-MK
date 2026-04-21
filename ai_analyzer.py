@@ -194,179 +194,37 @@ Respond ONLY with valid JSON in Arabic for text fields."""
 
 
 def _gemini_detect(client, image_base64):
-    """Use Gemini for precise bounding box detection."""
-    image_parts = [
-        {"mime_type": "image/jpeg", "data": base64.b64decode(image_base64)}
-    ]
-    
-    full_prompt = DETECTION_SYSTEM + "\n\n" + DETECTION_PROMPT
-    
-    response = client.generate_content([full_prompt, image_parts[0]])
-    
-    return _parse_json_response(response.text or "") or {"detected": [], "total": 0}
-                ))
-            ])
-        ],
-        config=types.GenerateContentConfig(
-            max_output_tokens=4096,
-            temperature=0.1,
-        )
-    )
-    return _parse_json_response(response.text or "") or {"detected": [], "total": 0}
-
+    """استخدام جيمناي للكشف عن التصدعات وتحديد مواقعها"""
+    try:
+        image_parts = [{"mime_type": "image/jpeg", "data": base64.b64decode(image_base64)}]
+        full_prompt = DETECTION_SYSTEM + "\n\n" + DETECTION_PROMPT
+        response = client.generate_content([full_prompt, image_parts[0]])
+        return _parse_json_response(response.text or "") or {"detected": [], "total": 0}
+    except Exception:
+        return {"detected": [], "total": 0}
 
 def _gpt_detect(client, image_base64):
-    """Use GPT-5.2 for bounding box detection (second opinion)."""
-    response = client.chat.completions.create(
-        model="gpt-5.2",
-        max_completion_tokens=4096,
-        messages=[
-            {"role": "system", "content": DETECTION_SYSTEM},
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{image_base64}",
-                            "detail": "high"
-                        }
-                    },
-                    {"type": "text", "text": DETECTION_PROMPT}
-                ]
-            }
-        ]
-    )
-    return _parse_json_response(response.choices[0].message.content or "") or {"detected": [], "total": 0}
+    """دالة احتياطية معطلة حالياً لتوفير الموارد"""
+    return {"detected": [], "total": 0}
 
-
-def _gpt_analyze(openai_client, gemini_client, image_base64, merged_detections, img_w, img_h):
-    """Use GPT-5.2 for detailed analysis given merged detections, with Gemini as fallback."""
+def _gemini_analyze(client, image_base64, merged_detections, img_w, img_h):
+    """التحليل الهندسي الإنشائي المفصل باستخدام جيمناي"""
     boxes_desc = ""
     for d in merged_detections:
         bbox = d.get("bbox", d)
-        dual = "✓ مؤكد من كلا النموذجين" if d.get("_dual_confirmed") else "مكتشف بنموذج واحد"
-        boxes_desc += (
-            f"\nالشرخ #{d.get('id', '?')}: "
-            f"x={bbox.get('x', 0):.3f}, y={bbox.get('y', 0):.3f}, "
-            f"w={bbox.get('width', 0):.3f}, h={bbox.get('height', 0):.3f} | "
-            f"ثقة أولية: {int(d.get('_conf', 0.7)*100)}% | {dual}"
-        )
+        boxes_desc += f"\nالشرخ #{d.get('id', '?')}: x={bbox.get('x', 0):.3f}, y={bbox.get('y', 0):.3f}, w={bbox.get('width', 0):.3f}, h={bbox.get('height', 0):.3f}"
 
-    prompt = f"""As an expert civil engineer, analyze the following crack regions detected in the road surface:
-{boxes_desc}
-
-Provide a detailed structural integrity report including:
-1. Crack severity (Low/Medium/High).
-2. Probable cause.
-3. Recommended repair action.
-4. Estimated maintenance urgency.
-"""
-
-Image dimensions: {img_w}x{img_h}px
-
-Provide expert structural engineering analysis. Return ONLY this JSON (Arabic text fields):
-{{
-    "summary": "ملخص 2-3 جمل",
-    "overall_severity": "CRITICAL/HIGH/MEDIUM/LOW",
-    "overall_confidence": 88,
-    "material_type": "نوع المادة",
-    "surface_condition": "وصف حالة السطح",
-    "environmental_factors": "العوامل البيئية المرئية",
-    "cracks": [
-        {{
-            "id": 1,
-            "bbox": {{"x": 0.15, "y": 0.22, "width": 0.35, "height": 0.08}},
-            "type": "نوع الشرخ",
-            "category": "structural/surface/cosmetic/shrinkage/settlement/thermal/corrosion/fatigue",
-            "is_structural": true,
-            "estimated_width_mm": "1.5-2.0",
-            "estimated_length_cm": "25-30",
-            "depth_assessment": "سطحي/متوسط/عميق",
-            "severity": "CRITICAL/HIGH/MEDIUM/LOW",
-            "confidence": 90,
-            "dual_confirmed": true,
-            "description": "وصف دقيق",
-            "cause_analysis": "تحليل السبب",
-            "progression_risk": "عالي/متوسط/منخفض",
-            "immediate_action": "الإجراء الفوري"
-        }}
-    ],
-    "recommendations": [
-        {{
-            "priority": 1,
-            "action": "الإجراء",
-            "timeline": "الجدول الزمني",
-            "estimated_cost_level": "منخفض/متوسط/عالي",
-            "details": "التفاصيل"
-        }}
-    ],
-    "monitoring_plan": "خطة المراقبة",
-    "professional_consultation_required": true,
-    "notes": "ملاحظات"
-}}
-
-Use the EXACT bbox coordinates provided above for each crack (do not change them).
-Set dual_confirmed: true for cracks confirmed by both models."""
-
-    # Try GPT first
-    try:
-        response = openai_client.chat.completions.create(
-            model="gpt-5.2",
-            max_completion_tokens=8192,
-            messages=[
-                {"role": "system", "content": ANALYSIS_SYSTEM},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{image_base64}",
-                                "detail": "high"
-                            }
-                        },
-                        {"type": "text", "text": prompt}
-                    ]
-                }
-            ]
-        )
-        result = _parse_json_response(response.choices[0].message.content or "")
-        if result:
-            return result
-    except Exception:
-        pass
-
-   # Fallback to Gemini for analysis
+    prompt = f"""As an expert civil engineer, analyze the road surface from this image. 
+    Detected cracks: {boxes_desc}
+    Image size: {img_w}x{img_h}px
+    Provide a full structural report in Arabic JSON format."""
+    
     try:
         image_parts = [{"mime_type": "image/jpeg", "data": base64.b64decode(image_base64)}]
-        full_prompt = ANALYSIS_SYSTEM + "\n\n" + prompt
-        
-        response = gemini_client.generate_content([full_prompt, image_parts[0]])
-        
-        result = _parse_json_response(response.text or "")
-        if result:
-            return result
-    except Exception as e:
-        print(f"Gemini Analysis Error: {e}")
-                    ))
-                ])
-            ],
-            config=types.GenerateContentConfig(max_output_tokens=8192, temperature=0.2)
-        )
-        result = _parse_json_response(response.text or "")
-        if result:
-            return result
+        response = client.generate_content([ANALYSIS_SYSTEM + "\n" + prompt, image_parts[0]])
+        return _parse_json_response(response.text or "")
     except Exception:
-        pass
-
-    return {
-        "summary": "تعذّر إكمال التحليل المفصّل، يرجى المحاولة مرة أخرى.",
-        "overall_severity": "UNKNOWN",
-        "overall_confidence": 0,
-        "cracks": [],
-        "recommendations": []
-    }
+        return {"summary": "حدث خطأ أثناء التحليل الإنشائي."}
 
 
 def detect_and_analyze(image_base64, img_width, img_height):
