@@ -2,8 +2,8 @@ import os
 import json
 import base64
 from openai import OpenAI
-from google import genai
-from google.genai import types
+import google.generativeai as genai
+from google.generativeai import types
 
 
 def get_openai_client():
