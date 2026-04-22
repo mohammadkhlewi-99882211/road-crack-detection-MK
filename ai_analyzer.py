@@ -1,243 +1,172 @@
 import os
 import json
 import base64
+import re
 import google.generativeai as genai
 
 def get_gemini_client():
-    """تهيئة عميل Gemini باستخدام مفتاح API من متغيرات البيئة."""
+    """تهيئة عميل Gemini باستخدام مفتاح API."""
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("الرجاء ضبط متغير البيئة GEMINI_API_KEY")
     genai.configure(api_key=api_key)
-    # استخدام موديل gemini-1.5-pro لقدراته العالية في تحليل الصور
+    # استخدام gemini-1.5-pro لقدراته الفائقة في تحليل الصور والاكتشاف البصري
     return genai.GenerativeModel('gemini-1.5-pro')
 
 def _parse_json_response(text):
-    """استخراج وتحليل JSON من نص استجابة النموذج."""
+    """استخراج وتحليل JSON من نص استجابة النموذج بمرونة عالية."""
     if not text:
         return None
-    text = text.strip()
-    # تنظيف علامات Markdown البرمجية إذا وجدت
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if lines[0].startswith("```json"):
-            text = "\n".join(lines[1:-1])
-        else:
-            text = "\n".join(lines[1:-1])
     
+    # تنظيف النص من علامات Markdown البرمجية
+    text = re.sub(r'```json\s*', '', text)
+    text = re.sub(r'```\s*', '', text)
+    text = text.strip()
+    
+    # محاولة إيجاد أول { وآخر }
     start = text.find("{")
     end = text.rfind("}") + 1
+    
     if start != -1 and end > start:
         try:
             return json.loads(text[start:end])
         except json.JSONDecodeError:
-            pass
+            # محاولة تنظيف إضافية إذا فشل التحليل (مثل الفواصل الزائدة)
+            try:
+                # محاولة بسيطة لإصلاح بعض أخطاء JSON الشائعة
+                cleaned = re.sub(r',\s*}', '}', text[start:end])
+                cleaned = re.sub(r',\s*]', ']', cleaned)
+                return json.loads(cleaned)
+            except:
+                pass
     return None
 
-# تعليمات نظام الكشف
-DETECTION_SYSTEM = """أنت نظام رؤية حاسوبية دقيق متخصص في اكتشاف الشقوق الإنشائية وعيوب الأسطح في الخرسانة والأسفلت والمباني.
-مهمتك الوحيدة: اكتشاف كل شرخ أو كسر مرئي وإرجاع إحداثيات دقيقة للصناديق المحيطة (Bounding Boxes).
-
-قواعد الصناديق المحيطة:
-- استخدم إحداثيات معيرة (Normalized): x, y, width, height جميعها في النطاق [0.0, 1.0].
-- x = الحافة اليسرى (0 = أقصى اليسار، 1 = أقصى اليمين).
-- y = الحافة العلوية (0 = أعلى الصورة، 1 = أسفلها).
-- width = العرض الأفقي لمنطقة الشرخ.
-- height = الارتفاع الرأسي لمنطقة الشرخ.
-- اجعل الصناديق ضيقة (Tight) حول الشرخ مباشرة.
-
-حساسية الاكتشاف:
-- اكتشف جميع الشقوق بغض النظر عن حجمها (حتى الشقوق الشعرية الدقيقة).
-- لا تشمل الظلال أو الفواصل الإنشائية المتعمدة.
-"""
-
-DETECTION_PROMPT = """افحص هذه الصورة بعناية لاستخراج جميع الشقوق والكسور.
-أرجع النتيجة فقط بتنسيق JSON التالي:
-{
-    "detected": [
-        {
-            "id": 1,
-            "bbox": {"x": 0.15, "y": 0.22, "width": 0.35, "height": 0.08},
-            "confidence": 90,
-            "rough_type": "linear crack",
-            "rough_severity": "HIGH"
-        }
-    ],
-    "total": 1,
-    "surface_visible": "concrete/asphalt/etc"
-}
-
-إذا لم توجد شقوق، أرجع: {"detected": [], "total": 0, "surface_visible": "unknown"}"""
-
-# تعليمات نظام التحليل الهندسي
-ANALYSIS_SYSTEM = """أنت مهندس إنشائي خبير وخبير في أمراض الخرسانة.
-بناءً على مواقع الشقوق المكتشفة، قدم تحليلاً هندسياً دقيقاً باللغة العربية.
-
-تصنيف الشقوق:
-- إنشائية (Structural): تخترق جسم المادة الحاملة.
-- سطحية (Surface): تقتصر على طبقات التشطيب.
-
-الخطورة (Severity):
-- حرجة (CRITICAL): عرض > 2 مم، إزاحة نشطة، صدأ حديد.
-- عالية (HIGH): 0.5 - 2 مم، أنماط إنشائية.
-- متوسطة (MEDIUM): 0.1 - 0.5 مم، شقوق شعرية إنشائية.
-- منخفضة (LOW): تجميلية فقط، < 0.1 مم.
-"""
-
-def _gemini_detect(model, image_base64):
-    """استخدام Gemini لاكتشاف الشقوق وتحديد مواقعها."""
-    try:
-        image_data = base64.b64decode(image_base64)
-        contents = [
-            {"mime_type": "image/jpeg", "data": image_data},
-            DETECTION_SYSTEM + "\n\n" + DETECTION_PROMPT
-        ]
-        response = model.generate_content(contents)
-        return _parse_json_response(response.text) or {"detected": [], "total": 0}
-    except Exception as e:
-        print(f"Error in detection: {e}")
-        return {"detected": [], "total": 0}
-
-def _gemini_analyze(model, image_base64, detections, img_w, img_h):
-    """استخدام Gemini لإجراء التحليل الهندسي المفصل باللغة العربية."""
-    boxes_desc = ""
-    for d in detections:
-        bbox = d.get("bbox", {})
-        boxes_desc += (
-            f"\nالشرخ #{d.get('id')}: "
-            f"x={bbox.get('x'):.3f}, y={bbox.get('y'):.3f}, "
-            f"w={bbox.get('width'):.3f}, h={bbox.get('height'):.3f}"
-        )
-
-    prompt = f"""تم اكتشاف مناطق الشقوق التالية بواسطة نظام الرؤية:
-{boxes_desc}
-
-أبعاد الصورة: {img_w}x{img_h} بكسل.
-
-قدم تحليلاً هندسياً إنشائياً خبيراً. أرجع النتيجة فقط بتنسيق JSON (باللغة العربية للحقول النصية):
-{{
-    "summary": "ملخص شامل للحالة",
-    "overall_severity": "CRITICAL/HIGH/MEDIUM/LOW",
-    "overall_confidence": 90,
-    "material_type": "نوع المادة",
-    "surface_condition": "وصف حالة السطح",
-    "cracks": [
-        {{
-            "id": 1,
-            "type": "نوع الشرخ",
-            "category": "structural/surface",
-            "is_structural": true,
-            "estimated_width_mm": "1.5",
-            "severity": "HIGH",
-            "description": "وصف دقيق للشرخ",
-            "cause_analysis": "تحليل السبب المحتمل",
-            "immediate_action": "الإجراء الفوري المطلوب"
-        }}
-    ],
-    "recommendations": [
-        {{
-            "priority": 1,
-            "action": "الإجراء المقترح",
-            "timeline": "الجدول الزمني",
-            "details": "تفاصيل إضافية"
-        }}
-    ],
-    "monitoring_plan": "خطة المراقبة المقترحة"
-}}"""
-
-    try:
-        image_data = base64.b64decode(image_base64)
-        contents = [
-            {"mime_type": "image/jpeg", "data": image_data},
-            ANALYSIS_SYSTEM + "\n\n" + prompt
-        ]
-        response = model.generate_content(contents)
-        result = _parse_json_response(response.text)
-        if result:
-            return result
-    except Exception as e:
-        print(f"Error in analysis: {e}")
-    
-    return {"summary": "تعذر إجراء التحليل التفصيلي حالياً."}
-
 def detect_and_analyze(image_base64, img_width, img_height):
-    """الدالة الرئيسية التي تجمع بين الاكتشاف والتحليل."""
+    """
+    الدالة الرئيسية لاكتشاف الشقوق وتحليلها.
+    تستخدم برومبت واحد مكثف يركز على الاكتشاف البصري الدقيق.
+    """
     model = get_gemini_client()
     
-    # 1. الاكتشاف
-    detection_result = _gemini_detect(model, image_base64)
-    raw_boxes = detection_result.get("detected", [])
+    # برومبت متخصص جداً في الاكتشاف البصري ورسم المربعات
+    # نطلب من النموذج إرجاع الإحداثيات بتنسيق [ymin, xmin, ymax, xmax] وهو المعيار لـ Gemini Spatial
+    prompt = """
+    أنت خبير في الرؤية الحاسوبية والهندسة الإنشائية. مهمتك هي فحص الصورة بدقة واكتشاف كل شرخ (Crack) أو كسر في الخرسانة أو الأسفلت.
     
-    # معالجة وتصحيح الإحداثيات
-    final_detections = []
-    for i, det in enumerate(raw_boxes):
-        bbox = det.get("bbox", det)
-        x = max(0.0, min(0.98, float(bbox.get("x", 0))))
-        y = max(0.0, min(0.98, float(bbox.get("y", 0))))
-        w = max(0.02, min(1.0 - x, float(bbox.get("width", 0.05))))
-        h = max(0.02, min(1.0 - y, float(bbox.get("height", 0.05))))
-        
-        final_detections.append({
-            "id": i + 1,
-            "bbox": {"x": x, "y": y, "width": w, "height": h},
-            "rough_type": det.get("rough_type", "شرخ"),
-            "rough_severity": det.get("rough_severity", "MEDIUM")
-        })
+    المهمة الأولى (الاكتشاف):
+    - حدد موقع كل شرخ بدقة متناهية.
+    - لكل شرخ، ارسم صندوقاً محيطاً (Bounding Box) يحيط بالشرخ تماماً.
+    - استخدم الإحداثيات المعيرة (Normalized) من 0 إلى 1000.
+    - التنسيق المطلوب للصندوق: [ymin, xmin, ymax, xmax] حيث 0 هو الأعلى/اليسار و 1000 هو الأسفل/اليمين.
     
-    # 2. التحقق من وجود نتائج
-    if not final_detections:
-        return {
-            "total_cracks_detected": 0,
-            "summary": "لم يتم الكشف عن أي شروخ واضحة في الصورة. السطح يبدو بحالة جيدة.",
-            "overall_severity": "LOW",
-            "cracks": [],
-            "recommendations": [
-                {"priority": 1, "action": "مراقبة دورية", "timeline": "6-12 شهر", "details": "الحفاظ على نظافة السطح ومراقبته"}
-            ]
+    المهمة الثانية (التحليل):
+    - لكل شرخ، حدد نوعه (طولي، عرضي، شعري، إلخ) ومدى خطورته (منخفضة، متوسطة، عالية، حرجة).
+    - قدم توصيات هندسية باللغة العربية.
+    
+    يجب أن يكون الرد بتنسيق JSON فقط كما يلي:
+    {
+      "detected": [
+        {
+          "id": 1,
+          "box_2d": [ymin, xmin, ymax, xmax],
+          "type": "نوع الشرخ باللغة العربية",
+          "severity": "HIGH/MEDIUM/LOW/CRITICAL",
+          "description": "وصف دقيق للشرخ باللغة العربية",
+          "action": "الإجراء المطلوب"
         }
+      ],
+      "summary": "ملخص شامل للحالة الإنشائية باللغة العربية",
+      "overall_severity": "الخطورة العامة",
+      "recommendations": ["توصية 1", "توصية 2"]
+    }
     
-    # 3. التحليل الهندسي
-    analysis = _gemini_analyze(model, image_base64, final_detections, img_width, img_height)
-    
-    # دمج بيانات الصناديق المحيطة مع نتائج التحليل
-    analysis["total_cracks_detected"] = len(final_detections)
-    if "cracks" in analysis:
-        for i, crack in enumerate(analysis["cracks"]):
-            if i < len(final_detections):
-                crack["bbox"] = final_detections[i]["bbox"]
-    else:
-        # بناء قائمة الشقوق في حال فشل التحليل في توليدها
-        analysis["cracks"] = []
-        for det in final_detections:
-            analysis["cracks"].append({
-                "id": det["id"],
-                "bbox": det["bbox"],
-                "type": det["rough_type"],
-                "severity": det["rough_severity"],
-                "description": "تم الكشف عن الشرخ بواسطة نظام الرؤية"
+    إذا لم تجد أي شقوق، أرجع "detected": [] ولكن ابذل قصارى جهدك لاكتشاف حتى الشقوق الصغيرة جداً.
+    """
+
+    try:
+        image_data = base64.b64decode(image_base64)
+        contents = [
+            {"mime_type": "image/jpeg", "data": image_data},
+            prompt
+        ]
+        
+        # إعدادات التوليد لضمان دقة النتائج
+        generation_config = {
+            "temperature": 0.1, # حرارة منخفضة لزيادة الدقة وعدم التخيل
+            "top_p": 0.95,
+            "max_output_tokens": 4096,
+        }
+        
+        response = model.generate_content(contents, generation_config=generation_config)
+        result = _parse_json_response(response.text)
+        
+        if not result:
+            raise ValueError("فشل في تحليل رد النموذج كـ JSON")
+            
+        # تحويل إحداثيات Gemini [ymin, xmin, ymax, xmax] إلى تنسيق التطبيق [x, y, width, height]
+        final_cracks = []
+        for i, item in enumerate(result.get("detected", [])):
+            box = item.get("box_2d", [])
+            if len(box) == 4:
+                ymin, xmin, ymax, xmax = box
+                # تحويل من 0-1000 إلى 0-1.0
+                x = xmin / 1000.0
+                y = ymin / 1000.0
+                w = (xmax - xmin) / 1000.0
+                h = (ymax - ymin) / 1000.0
+                
+                # التأكد من بقاء القيم ضمن النطاق المسموح
+                x = max(0.0, min(0.99, x))
+                y = max(0.0, min(0.99, y))
+                w = max(0.01, min(1.0 - x, w))
+                h = max(0.01, min(1.0 - y, h))
+                
+                final_cracks.append({
+                    "id": item.get("id", i + 1),
+                    "bbox": {"x": x, "y": y, "width": w, "height": h},
+                    "type": item.get("type", "شرخ"),
+                    "severity": item.get("severity", "MEDIUM"),
+                    "description": item.get("description", ""),
+                    "immediate_action": item.get("action", ""),
+                    "is_structural": item.get("severity") in ["HIGH", "CRITICAL"]
+                })
+        
+        # بناء الرد النهائي المتوافق مع واجهة التطبيق
+        final_response = {
+            "total_cracks_detected": len(final_cracks),
+            "summary": result.get("summary", "تم تحليل الصورة بنجاح."),
+            "overall_severity": result.get("overall_severity", "MEDIUM"),
+            "cracks": final_cracks,
+            "recommendations": []
+        }
+        
+        # تحويل التوصيات إلى التنسيق المتوقع
+        for i, rec in enumerate(result.get("recommendations", [])):
+            final_response["recommendations"].append({
+                "priority": i + 1,
+                "action": rec,
+                "timeline": "فوري" if "حرجة" in str(result.get("overall_severity")) else "خلال شهر",
+                "details": "بناءً على التحليل البصري للشقوق"
             })
             
-    return analysis
+        return final_response
+
+    except Exception as e:
+        print(f"Error in detect_and_analyze: {e}")
+        return {
+            "total_cracks_detected": 0,
+            "summary": "حدث خطأ أثناء معالجة الصورة. يرجى التأكد من جودة الصورة ومفتاح API.",
+            "overall_severity": "UNKNOWN",
+            "cracks": [],
+            "recommendations": []
+        }
 
 def generate_dashboard_recommendations(records_summary):
-    """توليد توصيات شاملة بناءً على سجلات متعددة."""
+    """توليد توصيات لوحة التحكم."""
     model = get_gemini_client()
-    
-    prompt = f"""بناءً على ملخص سجلات الشقوق التالية، قدم توصيات صيانة شاملة باللغة العربية:
-{records_summary}
-
-أرجع النتيجة فقط بتنسيق JSON:
-{{
-    "overall_assessment": "تقييم شامل للحالة العامة",
-    "priority_actions": ["إجراء 1", "إجراء 2"],
-    "maintenance_schedule": "جدول الصيانة المقترح",
-    "budget_estimate": "منخفض/متوسط/عالي",
-    "risk_areas": ["منطقة 1"],
-    "preventive_measures": ["إجراء وقائي 1"]
-}}"""
-
+    prompt = f"بناءً على السجلات التالية، قدم خطة صيانة شاملة باللغة العربية بتنسيق JSON:\n{records_summary}"
     try:
         response = model.generate_content(prompt)
         return _parse_json_response(response.text)
-    except Exception:
-        return {"overall_assessment": "تعذر توليد التوصيات العامة حالياً."}
+    except:
+        return {"overall_assessment": "تعذر توليد التوصيات."}
