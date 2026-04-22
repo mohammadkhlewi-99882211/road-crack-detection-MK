@@ -5,17 +5,16 @@ import re
 import io
 import traceback
 from PIL import Image
-from google import genai
-from google.genai import types
+from groq import Groq
 
-MODEL = "gemini-2.0-flash"
+MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 
 def _get_client():
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        raise ValueError("GEMINI_API_KEY is not set")
-    return genai.Client(api_key=api_key)
+        raise ValueError("GROQ_API_KEY is not set")
+    return Groq(api_key=api_key)
 
 
 def _parse_json(text):
@@ -56,13 +55,6 @@ def _pil_to_bytes(pil_img):
     return buf.getvalue()
 
 
-def _make_parts(text_prompt, img_bytes):
-    return [
-        types.Part(text=text_prompt),
-        types.Part(inline_data=types.Blob(mime_type="image/jpeg", data=img_bytes)),
-    ]
-
-
 DETECT_PROMPT = """Analyze this image and detect ALL visible cracks, fractures, and surface defects.
 
 Respond with ONLY a JSON object - no text, no markdown, no explanation.
@@ -90,10 +82,9 @@ Image size: {w}x{h}px
 
 Output ONLY this JSON structure with Arabic text fields. No markdown. No explanation.
 
-{{"summary":"summary","overall_severity":"HIGH","overall_confidence":85,"material_type":"asphalt","surface_condition":"desc","environmental_factors":"","cracks":[{{"id":1,"bbox":{{"x":0.1,"y":0.2,"width":0.5,"height":0.1}},"type":"crack","category":"structural","is_structural":true,"estimated_width_mm":"1-2","estimated_length_cm":"20-30","depth_assessment":"medium","severity":"HIGH","confidence":85,"description":"desc","cause_analysis":"cause","progression_risk":"medium","immediate_action":"action"}}],"recommendations":[{{"priority":1,"action":"action","timeline":"1 week","estimated_cost_level":"medium","details":"details"}}],"monitoring_plan":"plan","professional_consultation_required":true,"notes":""}}
+{{"summary":"ملخص الحالة","overall_severity":"HIGH","overall_confidence":85,"material_type":"أسفلت","surface_condition":"وصف السطح","environmental_factors":"","cracks":[{{"id":1,"bbox":{{"x":0.1,"y":0.2,"width":0.5,"height":0.1}},"type":"شرخ طولي","category":"structural","is_structural":true,"estimated_width_mm":"1-2","estimated_length_cm":"20-30","depth_assessment":"متوسط","severity":"HIGH","confidence":85,"description":"وصف","cause_analysis":"سبب","progression_risk":"متوسط","immediate_action":"إجراء"}}],"recommendations":[{{"priority":1,"action":"إجراء","timeline":"أسبوع","estimated_cost_level":"متوسط","details":"تفاصيل"}}],"monitoring_plan":"خطة","professional_consultation_required":true,"notes":""}}
 
-overall_severity = CRITICAL/HIGH/MEDIUM/LOW only.
-JSON only:"""
+overall_severity = CRITICAL/HIGH/MEDIUM/LOW only. JSON only:"""
 
 
 def _detect(image_base64):
@@ -102,7 +93,8 @@ def _detect(image_base64):
         client = _get_client()
         pil_img = _b64_to_pil(image_base64)
         img_bytes = _pil_to_bytes(pil_img)
-        print(f"[DETECT] image ready, size={len(img_bytes)} bytes, model={MODEL}")
+        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+        print(f"[DETECT] image ready, model={MODEL}")
     except Exception as e:
         print(f"[DETECT] setup error: {e}")
         traceback.print_exc()
@@ -110,18 +102,30 @@ def _detect(image_base64):
 
     for attempt in range(3):
         try:
-            temp = round(0.1 + attempt * 0.15, 2)
-            parts = _make_parts(DETECT_PROMPT, img_bytes)
             print(f"[DETECT {attempt+1}] calling API...")
-            response = client.models.generate_content(
+            response = client.chat.completions.create(
                 model=MODEL,
-                contents=parts,
-                config=types.GenerateContentConfig(
-                    temperature=temp,
-                    max_output_tokens=2048,
-                )
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{img_b64}"
+                                }
+                            },
+                            {
+                                "type": "text",
+                                "text": DETECT_PROMPT
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=2048,
+                temperature=round(0.1 + attempt * 0.15, 2),
             )
-            raw = response.text if response and response.text else ""
+            raw = response.choices[0].message.content or ""
             print(f"[DETECT {attempt+1}] raw={raw[:400]}")
             result = _parse_json(raw)
             if result and isinstance(result.get("detected"), list):
@@ -141,6 +145,7 @@ def _analyze(image_base64, detections, img_w, img_h):
         client = _get_client()
         pil_img = _b64_to_pil(image_base64)
         img_bytes = _pil_to_bytes(pil_img)
+        img_b64 = base64.b64encode(img_bytes).decode("utf-8")
     except Exception as e:
         print(f"[ANALYZE] setup error: {e}")
         traceback.print_exc()
@@ -157,18 +162,30 @@ def _analyze(image_base64, detections, img_w, img_h):
 
     for attempt in range(2):
         try:
-            temp = round(0.2 + attempt * 0.1, 2)
-            parts = _make_parts(prompt, img_bytes)
             print(f"[ANALYZE {attempt+1}] calling API...")
-            response = client.models.generate_content(
+            response = client.chat.completions.create(
                 model=MODEL,
-                contents=parts,
-                config=types.GenerateContentConfig(
-                    temperature=temp,
-                    max_output_tokens=4096,
-                )
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{img_b64}"
+                                }
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=4096,
+                temperature=round(0.2 + attempt * 0.1, 2),
             )
-            raw = response.text if response and response.text else ""
+            raw = response.choices[0].message.content or ""
             print(f"[ANALYZE {attempt+1}] raw={raw[:300]}")
             result = _parse_json(raw)
             if result and "summary" in result:
@@ -208,7 +225,7 @@ def detect_and_analyze(image_base64, img_width, img_height):
     if total == 0:
         return {
             "total_cracks_detected": 0,
-            "summary": "لم يتم الكشف عن أي شروخ أو شقوق.",
+            "summary": "لم يتم الكشف عن أي شروخ أو شقوق. السطح يبدو بحالة جيدة.",
             "overall_severity": "LOW", "overall_confidence": 90,
             "material_type": raw_result.get("surface_visible", "غير محدد"),
             "surface_condition": "السطح في حالة جيدة", "environmental_factors": "",
@@ -269,12 +286,13 @@ def generate_dashboard_recommendations(records_summary):
         f"Records:\n{records_summary}\n\nJSON only:"
     )
     try:
-        response = client.models.generate_content(
+        response = client.chat.completions.create(
             model=MODEL,
-            contents=[types.Part(text=prompt)],
-            config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=2048)
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+            temperature=0.3,
         )
-        result = _parse_json(response.text or "")
+        result = _parse_json(response.choices[0].message.content or "")
         if result:
             return result
     except Exception as e:
