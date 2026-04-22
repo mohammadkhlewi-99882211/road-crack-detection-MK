@@ -141,7 +141,7 @@ def _detect(image_base64):
             contents = _build_contents(DETECT_PROMPT, img_bytes)
 
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-flash-preview-04-17",
                 contents=contents,
                 config=types.GenerateContentConfig(
                     temperature=temp,
@@ -187,7 +187,7 @@ def _analyze(image_base64, detections, img_w, img_h):
             contents = _build_contents(prompt, img_bytes)
 
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-flash-preview-04-17",
                 contents=contents,
                 config=types.GenerateContentConfig(
                     temperature=temp,
@@ -324,7 +324,7 @@ def generate_dashboard_recommendations(records_summary):
     try:
         text_part = types.Part(text=prompt)
         response  = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash-preview-04-17",
             contents=[text_part],
             config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=2048)
         )
