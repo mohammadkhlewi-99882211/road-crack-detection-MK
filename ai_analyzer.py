@@ -3,14 +3,13 @@ import json
 import base64
 import re
 import io
+import traceback
 from PIL import Image
 from google import genai
 from google.genai import types
 
+MODEL = "gemini-2.5-flash-preview-04-17"
 
-# ─────────────────────────────────────────────
-#  Client
-# ─────────────────────────────────────────────
 
 def _get_client():
     api_key = os.environ.get("GEMINI_API_KEY")
@@ -18,10 +17,6 @@ def _get_client():
         raise ValueError("GEMINI_API_KEY is not set")
     return genai.Client(api_key=api_key)
 
-
-# ─────────────────────────────────────────────
-#  JSON parser
-# ─────────────────────────────────────────────
 
 def _parse_json(text):
     if not text:
@@ -44,10 +39,6 @@ def _parse_json(text):
     return None
 
 
-# ─────────────────────────────────────────────
-#  Image helper
-# ─────────────────────────────────────────────
-
 def _b64_to_pil(image_base64):
     data = base64.b64decode(image_base64)
     img = Image.open(io.BytesIO(data)).convert("RGB")
@@ -65,18 +56,21 @@ def _pil_to_bytes(pil_img):
     return buf.getvalue()
 
 
-# ─────────────────────────────────────────────
-#  Prompts
-# ─────────────────────────────────────────────
+def _make_parts(text_prompt, img_bytes):
+    return [
+        types.Part(text=text_prompt),
+        types.Part(inline_data=types.Blob(mime_type="image/jpeg", data=img_bytes)),
+    ]
+
 
 DETECT_PROMPT = """Analyze this image and detect ALL visible cracks, fractures, and surface defects.
 
-Respond with ONLY a JSON object — no text, no markdown, no explanation.
+Respond with ONLY a JSON object - no text, no markdown, no explanation.
 
 Example response:
 {"detected":[{"id":1,"bbox":{"x":0.1,"y":0.2,"width":0.5,"height":0.1},"confidence":90,"rough_type":"linear crack","rough_severity":"HIGH"}],"total":1,"image_quality":"good","surface_visible":"asphalt"}
 
-Bounding box rules (values 0.0–1.0):
+Bounding box rules (values 0.0-1.0):
 - x = left edge, y = top edge, width = horizontal span, height = vertical span
 - Fit tightly around each crack
 - Each crack gets its own bbox
@@ -96,81 +90,61 @@ Image size: {w}x{h}px
 
 Output ONLY this JSON structure with Arabic text fields. No markdown. No explanation.
 
-{{"summary":"ملخص الحالة في جملتين","overall_severity":"HIGH","overall_confidence":85,"material_type":"أسفلت","surface_condition":"وصف السطح","environmental_factors":"العوامل البيئية","cracks":[{{"id":1,"bbox":{{"x":0.1,"y":0.2,"width":0.5,"height":0.1}},"type":"شرخ طولي","category":"structural","is_structural":true,"estimated_width_mm":"1-2","estimated_length_cm":"20-30","depth_assessment":"متوسط","severity":"HIGH","confidence":85,"description":"وصف الشرخ","cause_analysis":"سبب الشرخ","progression_risk":"متوسط","immediate_action":"الإجراء المطلوب"}}],"recommendations":[{{"priority":1,"action":"الإجراء","timeline":"أسبوع","estimated_cost_level":"متوسط","details":"التفاصيل"}}],"monitoring_plan":"خطة المتابعة","professional_consultation_required":true,"notes":""}}
+{{"summary":"summary","overall_severity":"HIGH","overall_confidence":85,"material_type":"asphalt","surface_condition":"desc","environmental_factors":"","cracks":[{{"id":1,"bbox":{{"x":0.1,"y":0.2,"width":0.5,"height":0.1}},"type":"crack","category":"structural","is_structural":true,"estimated_width_mm":"1-2","estimated_length_cm":"20-30","depth_assessment":"medium","severity":"HIGH","confidence":85,"description":"desc","cause_analysis":"cause","progression_risk":"medium","immediate_action":"action"}}],"recommendations":[{{"priority":1,"action":"action","timeline":"1 week","estimated_cost_level":"medium","details":"details"}}],"monitoring_plan":"plan","professional_consultation_required":true,"notes":""}}
 
-IMPORTANT: Use the EXACT bbox values from the detected cracks above. overall_severity = CRITICAL/HIGH/MEDIUM/LOW only.
+overall_severity = CRITICAL/HIGH/MEDIUM/LOW only.
 JSON only:"""
 
 
-# ─────────────────────────────────────────────
-#  Build contents list — compatible with all recent SDK versions
-# ─────────────────────────────────────────────
-
-def _build_contents(text_prompt, img_bytes):
-    """
-    Build the contents list in a way that works with google-genai >= 1.0.
-    The new SDK uses types.Part(text=...) and types.Part(inline_data=...)
-    instead of the old Part.from_text() / Part.from_bytes() class-methods.
-    """
-    try:
-        # New SDK style (>= 1.0)
-        text_part  = types.Part(text=text_prompt)
-        image_part = types.Part(
-            inline_data=types.Blob(mime_type="image/jpeg", data=img_bytes)
-        )
-    except Exception:
-        # Fallback: old SDK style (< 1.0)
-        text_part  = types.Part.from_text(text_prompt)
-        image_part = types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")
-
-    return [text_part, image_part]
-
-
-# ─────────────────────────────────────────────
-#  Detection
-# ─────────────────────────────────────────────
-
 def _detect(image_base64):
-    client  = _get_client()
-    pil_img = _b64_to_pil(image_base64)
-    img_bytes = _pil_to_bytes(pil_img)
+    print("[DETECT] starting...")
+    try:
+        client = _get_client()
+        pil_img = _b64_to_pil(image_base64)
+        img_bytes = _pil_to_bytes(pil_img)
+        print(f"[DETECT] image ready, size={len(img_bytes)} bytes, model={MODEL}")
+    except Exception as e:
+        print(f"[DETECT] setup error: {e}")
+        traceback.print_exc()
+        return {"detected": [], "total": 0}
 
     for attempt in range(3):
         try:
-            temp     = round(0.1 + attempt * 0.15, 2)
-            contents = _build_contents(DETECT_PROMPT, img_bytes)
-
+            temp = round(0.1 + attempt * 0.15, 2)
+            parts = _make_parts(DETECT_PROMPT, img_bytes)
+            print(f"[DETECT {attempt+1}] calling API...")
             response = client.models.generate_content(
-                model="gemini-2.5-flash-preview-04-17",
-                contents=contents,
+                model=MODEL,
+                contents=parts,
                 config=types.GenerateContentConfig(
                     temperature=temp,
                     max_output_tokens=2048,
                 )
             )
             raw = response.text if response and response.text else ""
-            print(f"[DETECT {attempt+1}] raw: {raw[:400]}")
-
+            print(f"[DETECT {attempt+1}] raw={raw[:400]}")
             result = _parse_json(raw)
             if result and isinstance(result.get("detected"), list):
                 print(f"[DETECT {attempt+1}] OK — {len(result['detected'])} cracks")
                 return result
             print(f"[DETECT {attempt+1}] parse failed")
-
         except Exception as e:
             print(f"[DETECT {attempt+1}] error: {e}")
+            traceback.print_exc()
 
     return {"detected": [], "total": 0}
 
 
-# ─────────────────────────────────────────────
-#  Analysis
-# ─────────────────────────────────────────────
-
 def _analyze(image_base64, detections, img_w, img_h):
-    client  = _get_client()
-    pil_img = _b64_to_pil(image_base64)
-    img_bytes = _pil_to_bytes(pil_img)
+    print("[ANALYZE] starting...")
+    try:
+        client = _get_client()
+        pil_img = _b64_to_pil(image_base64)
+        img_bytes = _pil_to_bytes(pil_img)
+    except Exception as e:
+        print(f"[ANALYZE] setup error: {e}")
+        traceback.print_exc()
+        return None
 
     boxes = ""
     for d in detections:
@@ -179,79 +153,44 @@ def _analyze(image_base64, detections, img_w, img_h):
                   f"w={b.get('width',0):.3f} h={b.get('height',0):.3f} "
                   f"| {d.get('rough_type','crack')} | {d.get('rough_severity','MEDIUM')}\n")
 
-    prompt   = ANALYZE_PROMPT_TPL.format(boxes=boxes, w=img_w, h=img_h)
+    prompt = ANALYZE_PROMPT_TPL.format(boxes=boxes, w=img_w, h=img_h)
 
     for attempt in range(2):
         try:
-            temp     = round(0.2 + attempt * 0.1, 2)
-            contents = _build_contents(prompt, img_bytes)
-
+            temp = round(0.2 + attempt * 0.1, 2)
+            parts = _make_parts(prompt, img_bytes)
+            print(f"[ANALYZE {attempt+1}] calling API...")
             response = client.models.generate_content(
-                model="gemini-2.5-flash-preview-04-17",
-                contents=contents,
+                model=MODEL,
+                contents=parts,
                 config=types.GenerateContentConfig(
                     temperature=temp,
                     max_output_tokens=4096,
                 )
             )
             raw = response.text if response and response.text else ""
-            print(f"[ANALYZE {attempt+1}] raw: {raw[:300]}")
+            print(f"[ANALYZE {attempt+1}] raw={raw[:300]}")
             result = _parse_json(raw)
             if result and "summary" in result:
                 return result
         except Exception as e:
             print(f"[ANALYZE {attempt+1}] error: {e}")
+            traceback.print_exc()
 
-    # Fallback
-    sev_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
-    all_sevs  = [d.get("rough_severity", "MEDIUM") for d in detections]
-    overall   = next((s for s in sev_order if s in all_sevs), "MEDIUM")
+    return None
 
-    return {
-        "summary": f"تم اكتشاف {len(detections)} شرخ في السطح. يُنصح بالفحص الميداني.",
-        "overall_severity": overall,
-        "overall_confidence": 70,
-        "material_type": "غير محدد",
-        "surface_condition": "يوجد شروخ تستوجب الفحص",
-        "environmental_factors": "",
-        "cracks": [
-            {"id": d["id"], "bbox": d["bbox"],
-             "type": d.get("rough_type", "شرخ"), "category": "structural",
-             "is_structural": True, "estimated_width_mm": "غير محدد",
-             "estimated_length_cm": "غير محدد", "depth_assessment": "غير محدد",
-             "severity": d.get("rough_severity", "MEDIUM"),
-             "confidence": int(d.get("_conf", 0.7) * 100),
-             "description": "تم الكشف بواسطة الذكاء الاصطناعي",
-             "cause_analysis": "يتطلب فحصاً ميدانياً",
-             "progression_risk": "متوسط", "immediate_action": "فحص ميداني"}
-            for d in detections
-        ],
-        "recommendations": [{"priority": 1, "action": "فحص ميداني عاجل",
-                              "timeline": "خلال أسبوع", "estimated_cost_level": "متوسط",
-                              "details": "مراجعة مهندس إنشائي لتقييم الشروخ المكتشفة"}],
-        "monitoring_plan": "متابعة الشروخ شهرياً",
-        "professional_consultation_required": True,
-        "notes": ""
-    }
-
-
-# ─────────────────────────────────────────────
-#  Main pipeline
-# ─────────────────────────────────────────────
 
 def detect_and_analyze(image_base64, img_width, img_height):
-    # الكشف
+    print("[PIPELINE] starting detect_and_analyze")
     raw_result = _detect(image_base64)
-    raw_boxes  = raw_result.get("detected", [])
+    raw_boxes = raw_result.get("detected", [])
 
-    # توحيد bbox
     for b in raw_boxes:
         if "bbox" not in b:
             b["bbox"] = {"x": b.pop("x", 0), "y": b.pop("y", 0),
                          "width": b.pop("width", 0.05), "height": b.pop("height", 0.05)}
         b["_conf"] = float(b.get("confidence", 75)) / 100.0
 
-    # تصحيح وإعادة ترقيم
     final = []
     for i, det in enumerate(raw_boxes):
         bx = det["bbox"]
@@ -269,7 +208,7 @@ def detect_and_analyze(image_base64, img_width, img_height):
     if total == 0:
         return {
             "total_cracks_detected": 0,
-            "summary": "لم يتم الكشف عن أي شروخ أو شقوق. السطح يبدو بحالة جيدة.",
+            "summary": "لم يتم الكشف عن أي شروخ أو شقوق.",
             "overall_severity": "LOW", "overall_confidence": 90,
             "material_type": raw_result.get("surface_visible", "غير محدد"),
             "surface_condition": "السطح في حالة جيدة", "environmental_factors": "",
@@ -283,6 +222,18 @@ def detect_and_analyze(image_base64, img_width, img_height):
         }
 
     analysis = _analyze(image_base64, final, img_width, img_height)
+    if analysis is None:
+        sev_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+        all_sevs = [d.get("rough_severity", "MEDIUM") for d in final]
+        overall = next((s for s in sev_order if s in all_sevs), "MEDIUM")
+        analysis = {
+            "summary": f"تم اكتشاف {len(final)} شرخ في السطح.",
+            "overall_severity": overall, "overall_confidence": 70,
+            "material_type": "غير محدد", "surface_condition": "يوجد شروخ",
+            "environmental_factors": "", "cracks": [], "recommendations": [],
+            "monitoring_plan": "", "professional_consultation_required": True, "notes": ""
+        }
+
     analysis["total_cracks_detected"] = total
     analysis["_detection_info"] = {"gemini_detected": total}
 
@@ -307,10 +258,6 @@ def detect_and_analyze(image_base64, img_width, img_height):
     return analysis
 
 
-# ─────────────────────────────────────────────
-#  Dashboard recommendations
-# ─────────────────────────────────────────────
-
 def generate_dashboard_recommendations(records_summary):
     client = _get_client()
     prompt = (
@@ -322,10 +269,9 @@ def generate_dashboard_recommendations(records_summary):
         f"Records:\n{records_summary}\n\nJSON only:"
     )
     try:
-        text_part = types.Part(text=prompt)
-        response  = client.models.generate_content(
-            model="gemini-2.5-flash-preview-04-17",
-            contents=[text_part],
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=[types.Part(text=prompt)],
             config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=2048)
         )
         result = _parse_json(response.text or "")
