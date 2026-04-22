@@ -5,3 +5,4 @@ Pillow
 numpy
 plotly
 openai
+google-generativeai>=0.8.0
