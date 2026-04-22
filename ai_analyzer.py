@@ -120,8 +120,8 @@ def _build_contents(text_prompt, img_bytes):
         )
     except Exception:
         # Fallback: old SDK style (< 1.0)
-        text_part  = types.Part.from_text(text_prompt)
-        image_part = types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")
+        text_part  = types.Part(text=text_prompt)
+        image_part = types.Part(inline_data=types.Blob(mime_type="image/jpeg", data=img_bytes, mime_type="image/jpeg")
 
     return [text_part, image_part]
 
