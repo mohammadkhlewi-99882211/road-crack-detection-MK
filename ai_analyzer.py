@@ -103,23 +103,46 @@ JSON only:"""
 
 
 # ─────────────────────────────────────────────
+#  Build contents list — compatible with all recent SDK versions
+# ─────────────────────────────────────────────
+
+def _build_contents(text_prompt, img_bytes):
+    """
+    Build the contents list in a way that works with google-genai >= 1.0.
+    The new SDK uses types.Part(text=...) and types.Part(inline_data=...)
+    instead of the old Part.from_text() / Part.from_bytes() class-methods.
+    """
+    try:
+        # New SDK style (>= 1.0)
+        text_part  = types.Part(text=text_prompt)
+        image_part = types.Part(
+            inline_data=types.Blob(mime_type="image/jpeg", data=img_bytes)
+        )
+    except Exception:
+        # Fallback: old SDK style (< 1.0)
+        text_part  = types.Part.from_text(text_prompt)
+        image_part = types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")
+
+    return [text_part, image_part]
+
+
+# ─────────────────────────────────────────────
 #  Detection
 # ─────────────────────────────────────────────
 
 def _detect(image_base64):
-    client = _get_client()
+    client  = _get_client()
     pil_img = _b64_to_pil(image_base64)
     img_bytes = _pil_to_bytes(pil_img)
 
     for attempt in range(3):
         try:
-            temp = round(0.1 + attempt * 0.15, 2)
+            temp     = round(0.1 + attempt * 0.15, 2)
+            contents = _build_contents(DETECT_PROMPT, img_bytes)
+
             response = client.models.generate_content(
                 model="gemini-2.0-flash",
-                contents=[
-                    types.Part.from_text(DETECT_PROMPT),
-                    types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
-                ],
+                contents=contents,
                 config=types.GenerateContentConfig(
                     temperature=temp,
                     max_output_tokens=2048,
@@ -145,7 +168,7 @@ def _detect(image_base64):
 # ─────────────────────────────────────────────
 
 def _analyze(image_base64, detections, img_w, img_h):
-    client = _get_client()
+    client  = _get_client()
     pil_img = _b64_to_pil(image_base64)
     img_bytes = _pil_to_bytes(pil_img)
 
@@ -156,17 +179,16 @@ def _analyze(image_base64, detections, img_w, img_h):
                   f"w={b.get('width',0):.3f} h={b.get('height',0):.3f} "
                   f"| {d.get('rough_type','crack')} | {d.get('rough_severity','MEDIUM')}\n")
 
-    prompt = ANALYZE_PROMPT_TPL.format(boxes=boxes, w=img_w, h=img_h)
+    prompt   = ANALYZE_PROMPT_TPL.format(boxes=boxes, w=img_w, h=img_h)
 
     for attempt in range(2):
         try:
-            temp = round(0.2 + attempt * 0.1, 2)
+            temp     = round(0.2 + attempt * 0.1, 2)
+            contents = _build_contents(prompt, img_bytes)
+
             response = client.models.generate_content(
                 model="gemini-2.0-flash",
-                contents=[
-                    types.Part.from_text(prompt),
-                    types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
-                ],
+                contents=contents,
                 config=types.GenerateContentConfig(
                     temperature=temp,
                     max_output_tokens=4096,
@@ -300,9 +322,10 @@ def generate_dashboard_recommendations(records_summary):
         f"Records:\n{records_summary}\n\nJSON only:"
     )
     try:
-        response = client.models.generate_content(
+        text_part = types.Part(text=prompt)
+        response  = client.models.generate_content(
             model="gemini-2.0-flash",
-            contents=[types.Part.from_text(prompt)],
+            contents=[text_part],
             config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=2048)
         )
         result = _parse_json(response.text or "")
