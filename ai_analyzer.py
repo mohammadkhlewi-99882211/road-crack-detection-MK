@@ -157,10 +157,8 @@ def _detect(image_base64):
                 return result
             print(f"[DETECT {attempt+1}] parse failed")
 
-       except Exception as e:
-    import traceback
-    print(f"[DETECT {attempt+1}] error: {e}")
-    traceback.print_exc()
+        except Exception as e:
+            print(f"[DETECT {attempt+1}] error: {e}")
 
     return {"detected": [], "total": 0}
 
