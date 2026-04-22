@@ -9,6 +9,27 @@ import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 
+# TEMP DIAGNOSTIC - REMOVE AFTER TEST
+import os
+api_key = os.environ.get("GEMINI_API_KEY", "")
+print(f"[DIAG] API Key: {'SET — ' + api_key[:8] if api_key else 'NOT SET'}")
+try:
+    from google import genai
+    import google.genai as gm
+    print(f"[DIAG] google-genai version: {gm.__version__}")
+    client = genai.Client(api_key=api_key)
+    from google.genai import types
+    r = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=[types.Part(text="say hi")],
+        config=types.GenerateContentConfig(max_output_tokens=10)
+    )
+    print(f"[DIAG] API works: {r.text}")
+except Exception as e:
+    print(f"[DIAG] ERROR: {e}")
+
+
+
 from crack_detector import draw_ai_detections, image_to_base64, resize_for_api
 from ai_analyzer import detect_and_analyze, generate_dashboard_recommendations
 from database import save_record, get_all_records, get_record, delete_record, get_statistics
