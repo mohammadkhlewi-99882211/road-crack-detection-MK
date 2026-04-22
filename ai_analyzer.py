@@ -8,7 +8,7 @@ from PIL import Image
 from google import genai
 from google.genai import types
 
-MODEL = "gemini-2.5-flash-preview-04-17"
+MODEL = "gemini-1.5-flash"
 
 
 def _get_client():
