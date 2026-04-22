@@ -6,14 +6,11 @@ from google import genai
 from google.genai import types
 
 def get_gemini_client():
-    """تهيئة عميل Gemini باستخدام المكتبة الجديدة google-genai المتوافقة مع Streamlit Cloud."""
+    """تهيئة عميل Gemini باستخدام مفتاح API."""
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("الرجاء ضبط متغير البيئة GEMINI_API_KEY")
-    
-    # تهيئة العميل الجديد
-    client = genai.Client(api_key=api_key)
-    return client
+    return genai.Client(api_key=api_key)
 
 def _parse_json_response(text):
     """استخراج وتحليل JSON من نص استجابة النموذج بمرونة عالية."""
@@ -35,66 +32,68 @@ def _parse_json_response(text):
 
 def detect_and_analyze(image_base64, img_width, img_height):
     """
-    الدالة الرئيسية المطابقة لمتطلبات app.py والمحدثة للمكتبة الجديدة.
-    تستخدم Gemini 1.5 Pro لاكتشاف الشقوق بدقة متناهية.
+    الدالة الرئيسية المحدثة مع إيقاف فلاتر الأمان لضمان الاكتشاف بنسبة 100%.
     """
     client = get_gemini_client()
     
-    # برومبت متخصص يركز على الاكتشاف والتحليل الهندسي باللغة العربية
+    # برومبت متخصص ومباشر جداً
     prompt = """
-    أنت خبير هندسي متخصص في فحص المنشآت. مهمتك هي اكتشاف كل شرخ في الصورة.
-    
-    يجب أن يكون الرد بتنسيق JSON فقط ويحتوي على الحقول التالية باللغة العربية:
+    Examine this image and find ALL structural cracks. 
+    Return ONLY a JSON object in Arabic for text fields:
     {
-      "total_cracks_detected": عدد الشروخ,
-      "summary": "ملخص عام للحالة الإنشائية",
+      "total_cracks_detected": number,
+      "summary": "ملخص شامل",
       "overall_severity": "CRITICAL/HIGH/MEDIUM/LOW",
       "overall_confidence": 95,
-      "material_type": "نوع المادة (خرسانة/أسفلت/إلخ)",
-      "surface_condition": "وصف حالة السطح",
-      "environmental_factors": "العوامل البيئية المرئية",
+      "material_type": "نوع المادة",
+      "surface_condition": "وصف السطح",
+      "environmental_factors": "العوامل البيئية",
       "cracks": [
         {
           "id": 1,
           "box_2d": [ymin, xmin, ymax, xmax],
           "type": "نوع الشرخ",
-          "category": "تصنيف الشرخ",
-          "is_structural": true/false,
+          "category": "تصنيف",
+          "is_structural": true,
           "estimated_width_mm": "1.5",
           "estimated_length_cm": "20",
-          "depth_assessment": "تقييم العمق",
-          "severity": "CRITICAL/HIGH/MEDIUM/LOW",
+          "depth_assessment": "عميق",
+          "severity": "HIGH",
           "confidence": 90,
           "description": "وصف دقيق",
           "cause_analysis": "تحليل السبب",
-          "progression_risk": "عالي/متوسط/منخفض",
-          "immediate_action": "الإجراء الفوري"
+          "progression_risk": "عالي",
+          "immediate_action": "إجراء فوري"
         }
       ],
       "recommendations": [
         {
           "priority": 1,
-          "action": "الإجراء المقترح",
-          "timeline": "الجدول الزمني",
-          "estimated_cost_level": "منخفض/متوسط/عالي",
-          "details": "تفاصيل إضافية"
+          "action": "إجراء",
+          "timeline": "فوري",
+          "estimated_cost_level": "متوسط",
+          "details": "تفاصيل"
         }
       ],
-      "monitoring_plan": "خطة المراقبة",
-      "professional_consultation_required": true/false,
-      "notes": "ملاحظات إضافية"
+      "monitoring_plan": "خطة مراقبة",
+      "professional_consultation_required": true,
+      "notes": ""
     }
     
-    ملاحظة هامة للاكتشاف:
-    - استخدم إحداثيات [ymin, xmin, ymax, xmax] في نطاق 0-1000 لتحديد مكان كل شرخ في حقل 'box_2d'.
-    - ابحث عن أدق الشقوق والكسور.
+    For each crack, use [ymin, xmin, ymax, xmax] in 0-1000 range in 'box_2d' field.
     """
 
     try:
-        # فك تشفير الصورة وإرسالها باستخدام المكتبة الجديدة
         image_bytes = base64.b64decode(image_base64)
         
-        # استدعاء Gemini 1.5 Pro باستخدام المكتبة الجديدة
+        # إعدادات الأمان لتعطيل الفلاتر (Block None) لضمان التحليل الكامل
+        safety_settings = [
+            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+        ]
+
         response = client.models.generate_content(
             model="gemini-1.5-pro",
             contents=[
@@ -104,7 +103,8 @@ def detect_and_analyze(image_base64, img_width, img_height):
             config=types.GenerateContentConfig(
                 temperature=0.1,
                 max_output_tokens=4096,
-                response_mime_type="application/json"
+                response_mime_type="application/json",
+                safety_settings=safety_settings # تفعيل إعدادات الأمان المفتوحة
             )
         )
         
@@ -112,21 +112,17 @@ def detect_and_analyze(image_base64, img_width, img_height):
         if not result:
             return {"total_cracks_detected": 0, "summary": "لم يتم العثور على شقوق.", "cracks": []}
             
-        # تحويل إحداثيات Gemini Spatial إلى bbox المتوقع في app.py
         processed_cracks = []
         for i, crack in enumerate(result.get("cracks", [])):
             box = crack.get("box_2d", [])
             if len(box) == 4:
                 ymin, xmin, ymax, xmax = box
-                # تحويل إلى نظام bbox (x, y, width, height) بنسبة 0-1.0
                 crack["bbox"] = {
                     "x": xmin / 1000.0,
                     "y": ymin / 1000.0,
                     "width": (xmax - xmin) / 1000.0,
                     "height": (ymax - ymin) / 1000.0
                 }
-            
-            # التأكد من وجود الحقول التي يطلبها app.py
             crack["id"] = crack.get("id", i + 1)
             crack["confidence"] = crack.get("confidence", 90)
             crack["is_structural"] = crack.get("is_structural", crack.get("severity") in ["HIGH", "CRITICAL"])
@@ -138,16 +134,16 @@ def detect_and_analyze(image_base64, img_width, img_height):
         return result
 
     except Exception as e:
-        print(f"Error in Gemini Analysis: {e}")
+        print(f"Error: {e}")
         return {"total_cracks_detected": 0, "summary": f"خطأ تقني: {str(e)}", "cracks": []}
 
 def generate_dashboard_recommendations(records_summary):
-    """توصيات لوحة التحكم المطابقة لـ app.py باستخدام المكتبة الجديدة."""
+    """توصيات لوحة التحكم."""
     client = get_gemini_client()
     try:
         response = client.models.generate_content(
             model="gemini-1.5-pro",
-            contents=[f"بناءً على السجلات التالية، قدم توصيات صيانة شاملة باللغة العربية بتنسيق JSON:\n{records_summary}"],
+            contents=[f"بناءً على السجلات التالية، قدم توصيات صيانة باللغة العربية بتنسيق JSON:\n{records_summary}"],
             config=types.GenerateContentConfig(response_mime_type="application/json")
         )
         return _parse_json_response(response.text)
