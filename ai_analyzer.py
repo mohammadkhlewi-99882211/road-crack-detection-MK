@@ -55,82 +55,167 @@ def _pil_to_bytes(pil_img):
     return buf.getvalue()
 
 
-def _fix_bbox(bbox, min_size=0.05):
+def _fix_bbox(bbox):
     """
-    تصحيح الـ bbox:
-    - ضمان حد أدنى للحجم حتى لا يظهر كخط
-    - للشقوق الرأسية: width صغير وheight كبير — هذا صحيح، لا نعكسه
-    - للشقوق الأفقية: height صغير وwidth كبير — هذا صحيح أيضاً
-    - المشكلة فقط عندما يكون كلاهما صغير جداً
+    تصحيح الـ bbox مع padding يضمن إحاطة الشرخ كاملاً في أي اتجاه.
     """
     x = max(0.0, min(0.95, float(bbox.get("x", 0))))
     y = max(0.0, min(0.95, float(bbox.get("y", 0))))
-    w = float(bbox.get("width", 0.05))
-    h = float(bbox.get("height", 0.05))
+    w = float(bbox.get("width", 0.1))
+    h = float(bbox.get("height", 0.1))
 
-    # إذا كان الـ bbox صغير جداً في كلا الاتجاهين — وسّعه
-    if w < min_size and h < min_size:
-        w = min_size
-        h = min_size
+    # حد أدنى مطلق لكل بُعد
+    w = max(0.04, w)
+    h = max(0.04, h)
 
-    # إذا كان أحد الأبعاد صغير جداً مقارنة بالآخر بشكل غير منطقي
-    # (مثلاً width=0.01 وheight=0.6 — هذا شرخ رأسي وهو صحيح)
-    # لكن إذا width=0.01 وheight=0.01 — هذا خطأ
-    # الحد الأدنى المطلق لكل بُعد هو 0.03
-    w = max(0.03, min(1.0 - x, w))
-    h = max(0.03, min(1.0 - y, h))
+    # padding نسبي: 3% من حجم الصورة في كل اتجاه
+    pad_x = 0.03
+    pad_y = 0.03
 
-    # إضافة padding بسيط (2%) حول الشرخ لضمان الإحاطة الكاملة
-    pad = 0.02
-    x = max(0.0, x - pad)
-    y = max(0.0, y - pad)
-    w = min(1.0 - x, w + pad * 2)
-    h = min(1.0 - y, h + pad * 2)
+    x = max(0.0, x - pad_x)
+    y = max(0.0, y - pad_y)
+    w = min(1.0 - x, w + pad_x * 2)
+    h = min(1.0 - y, h + pad_y * 2)
 
-    return {"x": x, "y": y, "width": w, "height": h}
+    return {"x": round(x, 4), "y": round(y, 4),
+            "width": round(w, 4), "height": round(h, 4)}
 
 
-DETECT_PROMPT = """Analyze this image and detect ALL visible cracks, fractures, and surface defects.
+# ─────────────────────────────────────────────
+#  Prompt الكشف — محسّن للتمييز بين أنواع الأضرار
+# ─────────────────────────────────────────────
 
-Respond with ONLY a JSON object - no text, no markdown, no explanation.
+DETECT_PROMPT = """You are an expert computer vision system specialized in structural damage assessment.
+Your task: carefully inspect this image and detect ALL damage with precise bounding boxes.
 
-CRITICAL BOUNDING BOX INSTRUCTIONS:
-- Values are normalized 0.0 to 1.0 (fraction of image width/height)
-- x = left edge of the FULL crack from start to end
-- y = top edge of the FULL crack from start to end
-- width = horizontal distance from leftmost to rightmost point of the FULL crack
-- height = vertical distance from topmost to bottommost point of the FULL crack
-- The bbox must FULLY CONTAIN the entire crack path from one end to the other
-- For VERTICAL cracks: height will be LARGE (e.g. 0.6-0.9), width will be small (e.g. 0.05-0.15)
-- For HORIZONTAL cracks: width will be LARGE (e.g. 0.5-0.9), height will be small
-- For DIAGONAL cracks: both width and height will be moderate to large
-- NEVER use height < 0.1 for a crack that runs vertically through the image
-- NEVER use width < 0.1 for a crack that runs horizontally through the image
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CLASSIFICATION GUIDE — READ CAREFULLY:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Example for a vertical crack running most of the image height:
-{"detected":[{"id":1,"bbox":{"x":0.35,"y":0.05,"width":0.12,"height":0.88},"confidence":92,"rough_type":"vertical crack","rough_severity":"HIGH"}],"total":1,"image_quality":"good","surface_visible":"concrete"}
+1. STRUCTURAL_CRACK (شرخ إنشائي عميق)
+   - Penetrates deep into the material (concrete, asphalt, masonry)
+   - Has DARK, SHARP, well-defined edges
+   - Shows depth/shadow inside the crack
+   - Width varies but usually > 0.3mm
+   - Cannot be rubbed off or scratched away
+   - Often accompanied by displacement or offset on either side
+   - Severity: HIGH or CRITICAL
 
-Example for a diagonal crack:
-{"detected":[{"id":1,"bbox":{"x":0.10,"y":0.08,"width":0.75,"height":0.80},"confidence":88,"rough_type":"diagonal crack","rough_severity":"HIGH"}],"total":1,"image_quality":"good","surface_visible":"asphalt"}
+2. SURFACE_CRACK (شرخ سطحي / تشقق)
+   - Limited to the top surface layer only
+   - Thin, fine lines — no visible depth
+   - Common: map cracking / crazing patterns (شبكة خيوط رفيعة)
+   - Caused by shrinkage, thermal expansion, aging
+   - No displacement between crack edges
+   - Severity: LOW or MEDIUM
 
-If no cracks found: {"detected":[],"total":0,"image_quality":"good","surface_visible":"unknown"}
+3. PAINT_PEELING (تقشر دهان / طلاء)
+   - Flaking or peeling of PAINT or COATING only
+   - Shows a different color layer underneath
+   - Edges are irregular and lifting
+   - No structural damage to the base material
+   - Often caused by moisture, UV, or poor adhesion
+   - Severity: LOW (cosmetic only)
+
+4. SPALLING (تقشر خرساني / تفتت)
+   - Chunks of concrete or asphalt breaking away
+   - Exposes aggregate or rebar underneath
+   - Rough, uneven surface with material loss
+   - More serious than paint peeling
+   - Severity: MEDIUM or HIGH
+
+5. SHADOW / JOINT / GROOVE (ظل / درز / أخدود)
+   - DO NOT detect these as cracks
+   - Shadows: change based on lighting angle, soft edges
+   - Construction joints: straight, uniform, intentional
+   - Grooves: regular pattern, smooth edges
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LIGHTING CONDITIONS — IMPORTANT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Dark areas are NOT always cracks — check for sharp defined edges
+- A crack has CONSISTENT width along its path (not just a dark patch)
+- Shadows change with lighting but cracks do not
+- If unsure between shadow and crack: look for edge sharpness and continuity
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BOUNDING BOX RULES:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+All values normalized 0.0–1.0 (fraction of image size):
+- x = left edge of the damage zone
+- y = top edge of the damage zone
+- width = full horizontal span of the damage from left to right
+- height = full vertical span of the damage from top to bottom
+- The bbox must FULLY COVER the entire crack or damage from end to end
+
+DIRECTION EXAMPLES:
+- Vertical crack top-to-bottom: x≈0.45, y≈0.02, width≈0.10, height≈0.95
+- Horizontal crack left-to-right: x≈0.02, y≈0.48, width≈0.95, height≈0.08
+- Diagonal crack: x≈0.10, y≈0.10, width≈0.75, height≈0.80
+- Small local crack: x≈0.30, y≈0.25, width≈0.20, height≈0.25
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OUTPUT FORMAT — JSON ONLY, NO MARKDOWN:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{"detected":[{"id":1,"bbox":{"x":0.35,"y":0.05,"width":0.12,"height":0.88},"confidence":90,"damage_type":"STRUCTURAL_CRACK","rough_severity":"HIGH","orientation":"vertical","notes":"deep crack with visible shadow"}],"total":1,"image_quality":"good","surface_visible":"concrete","lighting_conditions":"normal"}
+
+damage_type must be one of: STRUCTURAL_CRACK / SURFACE_CRACK / PAINT_PEELING / SPALLING
+rough_severity must be one of: CRITICAL / HIGH / MEDIUM / LOW
+orientation must be one of: vertical / horizontal / diagonal / irregular
+
+If no real damage found: {"detected":[],"total":0,"image_quality":"good","surface_visible":"unknown","lighting_conditions":"normal"}
+
+FINAL CHECK before responding:
+- Is each detected item a REAL crack/damage or just a shadow/joint?
+- Does each bbox fully cover the damage from start to finish?
+- Is the damage_type correctly classified?
 
 Output JSON only:"""
 
 
-ANALYZE_PROMPT_TPL = """You are a structural engineer. Analyze these cracks found in the image.
+# ─────────────────────────────────────────────
+#  Prompt التحليل الهندسي
+# ─────────────────────────────────────────────
 
-Detected cracks:
+ANALYZE_PROMPT_TPL = """You are a senior structural engineer with expertise in concrete pathology and infrastructure assessment.
+
+Pre-detected damage locations (from AI vision system):
 {boxes}
 
-Image size: {w}x{h}px
+Image dimensions: {w}x{h}px
 
-Output ONLY this JSON structure with Arabic text fields. No markdown. No explanation.
+Your task: provide detailed engineering analysis for each detected damage item.
 
-{{"summary":"ملخص الحالة","overall_severity":"HIGH","overall_confidence":85,"material_type":"أسفلت","surface_condition":"وصف السطح","environmental_factors":"","cracks":[{{"id":1,"bbox":{{"x":0.1,"y":0.05,"width":0.12,"height":0.88}},"type":"شرخ رأسي","category":"structural","is_structural":true,"estimated_width_mm":"1-2","estimated_length_cm":"20-30","depth_assessment":"متوسط","severity":"HIGH","confidence":85,"description":"وصف","cause_analysis":"سبب","progression_risk":"متوسط","immediate_action":"إجراء"}}],"recommendations":[{{"priority":1,"action":"إجراء","timeline":"أسبوع","estimated_cost_level":"متوسط","details":"تفاصيل"}}],"monitoring_plan":"خطة","professional_consultation_required":true,"notes":""}}
+SEVERITY SCALE:
+- CRITICAL: Structural integrity at risk. Immediate action required. (e.g., full-depth crack, rebar exposed, active displacement)
+- HIGH: Significant structural damage. Action within days. (e.g., wide crack >2mm, deep spalling)
+- MEDIUM: Moderate damage. Monitor and repair soon. (e.g., surface crack 0.3-2mm, minor spalling)
+- LOW: Cosmetic/surface only. Routine maintenance. (e.g., paint peeling, hairline surface cracks <0.3mm)
 
-IMPORTANT: Use the EXACT bbox values from the detected cracks above. Do NOT change them.
-overall_severity = CRITICAL/HIGH/MEDIUM/LOW only. JSON only:"""
+DAMAGE CATEGORY DEFINITIONS:
+- structural: Penetrates load-bearing material
+- surface: Limited to top layer, no structural concern
+- cosmetic: Paint, coating, or finish layer only
+- shrinkage: Fine map cracking from drying/curing
+- settlement: Caused by differential movement/subsidence
+- thermal: From temperature expansion/contraction cycles
+- corrosion: Related to rebar corrosion (rust stains visible)
+- fatigue: From repeated loading (common in roads/bridges)
+- spalling: Loss of surface material chunks
+
+Output ONLY the JSON below with Arabic text fields. No markdown. No explanation outside the JSON.
+
+{{"summary":"ملخص شامل للحالة الإنشائية في 3-4 جمل يذكر أنواع الأضرار ودرجة خطورتها","overall_severity":"HIGH","overall_confidence":85,"material_type":"نوع المادة","surface_condition":"وصف تفصيلي لحالة السطح","environmental_factors":"العوامل البيئية المرئية مثل الرطوبة والتعرية","cracks":[{{"id":1,"bbox":{{"x":0.35,"y":0.05,"width":0.12,"height":0.88}},"type":"شرخ إنشائي رأسي عميق","damage_type":"STRUCTURAL_CRACK","category":"structural","is_structural":true,"estimated_width_mm":"2-3","estimated_length_cm":"45-50","depth_assessment":"عميق — يخترق طبقة الخرسانة الأساسية","severity":"HIGH","confidence":88,"orientation":"رأسي","description":"وصف دقيق للشرخ وخصائصه المرئية","cause_analysis":"التحليل المحتمل لسبب نشوء الشرخ","progression_risk":"عالي — يتوقع تطور سريع مع الأحمال والرطوبة","immediate_action":"حقن الشرخ بالإيبوكسي وفحص الأسباب الجذرية"}}],"recommendations":[{{"priority":1,"action":"وصف الإجراء","timeline":"الجدول الزمني المقترح","estimated_cost_level":"منخفض/متوسط/عالي","details":"تفاصيل تقنية للتنفيذ"}}],"monitoring_plan":"خطة المراقبة والمتابعة الدورية","professional_consultation_required":true,"notes":"ملاحظات إضافية للمهندس الميداني"}}
+
+RULES:
+- Use EXACT bbox values from the detected damage above — do NOT change them
+- overall_severity = CRITICAL/HIGH/MEDIUM/LOW only
+- For PAINT_PEELING: is_structural=false, category="cosmetic", severity=LOW
+- For SURFACE_CRACK: is_structural=false, category="surface", severity=LOW or MEDIUM
+- For STRUCTURAL_CRACK: is_structural=true, severity=HIGH or CRITICAL
+- For SPALLING: is_structural depends on depth, severity=MEDIUM or HIGH
+- All text fields must be in Arabic
+- JSON only, no text outside the JSON:"""
 
 
 def _detect(image_base64):
@@ -167,13 +252,13 @@ def _detect(image_base64):
                     }
                 ],
                 max_tokens=2048,
-                temperature=round(0.1 + attempt * 0.15, 2),
+                temperature=round(0.05 + attempt * 0.1, 2),
             )
             raw = response.choices[0].message.content or ""
             print(f"[DETECT {attempt+1}] raw={raw[:500]}")
             result = _parse_json(raw)
             if result and isinstance(result.get("detected"), list):
-                print(f"[DETECT {attempt+1}] OK — {len(result['detected'])} cracks")
+                print(f"[DETECT {attempt+1}] OK — {len(result['detected'])} items found")
                 return result
             print(f"[DETECT {attempt+1}] parse failed")
         except Exception as e:
@@ -197,9 +282,14 @@ def _analyze(image_base64, detections, img_w, img_h):
     boxes = ""
     for d in detections:
         b = d.get("bbox", {})
-        boxes += (f"#{d['id']}: x={b.get('x',0):.3f} y={b.get('y',0):.3f} "
-                  f"w={b.get('width',0):.3f} h={b.get('height',0):.3f} "
-                  f"| {d.get('rough_type','crack')} | {d.get('rough_severity','MEDIUM')}\n")
+        boxes += (
+            f"#{d['id']}: x={b.get('x',0):.3f} y={b.get('y',0):.3f} "
+            f"w={b.get('width',0):.3f} h={b.get('height',0):.3f} | "
+            f"type={d.get('damage_type', d.get('rough_type','STRUCTURAL_CRACK'))} | "
+            f"severity={d.get('rough_severity','MEDIUM')} | "
+            f"orientation={d.get('orientation','unknown')} | "
+            f"notes={d.get('notes','')}\n"
+        )
 
     prompt = ANALYZE_PROMPT_TPL.format(boxes=boxes, w=img_w, h=img_h)
 
@@ -224,7 +314,7 @@ def _analyze(image_base64, detections, img_w, img_h):
                     }
                 ],
                 max_tokens=4096,
-                temperature=round(0.2 + attempt * 0.1, 2),
+                temperature=round(0.15 + attempt * 0.1, 2),
             )
             raw = response.choices[0].message.content or ""
             print(f"[ANALYZE {attempt+1}] raw={raw[:300]}")
@@ -246,70 +336,100 @@ def detect_and_analyze(image_base64, img_width, img_height):
     # توحيد bbox وتصحيحه
     for b in raw_boxes:
         if "bbox" not in b:
-            b["bbox"] = {"x": b.pop("x", 0), "y": b.pop("y", 0),
-                         "width": b.pop("width", 0.05), "height": b.pop("height", 0.05)}
+            b["bbox"] = {
+                "x": b.pop("x", 0), "y": b.pop("y", 0),
+                "width": b.pop("width", 0.1), "height": b.pop("height", 0.1)
+            }
         b["_conf"] = float(b.get("confidence", 75)) / 100.0
 
     final = []
     for i, det in enumerate(raw_boxes):
-        # تطبيق الإصلاح الذكي للـ bbox
         det["bbox"] = _fix_bbox(det["bbox"])
         det["id"] = i + 1
-        print(f"[PIPELINE] crack #{i+1} bbox: {det['bbox']}")
+        print(f"[PIPELINE] item #{i+1}: type={det.get('damage_type','?')} "
+              f"severity={det.get('rough_severity','?')} bbox={det['bbox']}")
         final.append(det)
 
     total = len(final)
-    print(f"[PIPELINE] total detections: {total}")
+    print(f"[PIPELINE] total: {total}")
 
     if total == 0:
         return {
             "total_cracks_detected": 0,
-            "summary": "لم يتم الكشف عن أي شروخ أو شقوق. السطح يبدو بحالة جيدة.",
+            "summary": "لم يتم الكشف عن أي شروخ أو أضرار. السطح يبدو بحالة جيدة.",
             "overall_severity": "LOW", "overall_confidence": 90,
             "material_type": raw_result.get("surface_visible", "غير محدد"),
-            "surface_condition": "السطح في حالة جيدة", "environmental_factors": "",
+            "surface_condition": "السطح في حالة جيدة بدون أضرار مرئية",
+            "environmental_factors": "",
             "cracks": [],
-            "recommendations": [{"priority": 1, "action": "الصيانة الوقائية الدورية",
-                                  "timeline": "كل 6-12 شهراً", "estimated_cost_level": "منخفض",
-                                  "details": "فحص دوري للحفاظ على الحالة الجيدة"}],
+            "recommendations": [{
+                "priority": 1,
+                "action": "الصيانة الوقائية الدورية",
+                "timeline": "كل 6-12 شهراً",
+                "estimated_cost_level": "منخفض",
+                "details": "فحص دوري للحفاظ على الحالة الجيدة للسطح"
+            }],
             "monitoring_plan": "فحص بصري كل 6 أشهر",
-            "professional_consultation_required": False, "notes": "",
+            "professional_consultation_required": False,
+            "notes": "",
             "_detection_info": {"gemini_detected": 0}
         }
 
     analysis = _analyze(image_base64, final, img_width, img_height)
+
+    # Fallback إذا فشل التحليل
     if analysis is None:
         sev_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
         all_sevs = [d.get("rough_severity", "MEDIUM") for d in final]
         overall = next((s for s in sev_order if s in all_sevs), "MEDIUM")
         analysis = {
-            "summary": f"تم اكتشاف {len(final)} شرخ في السطح.",
-            "overall_severity": overall, "overall_confidence": 70,
-            "material_type": "غير محدد", "surface_condition": "يوجد شروخ",
-            "environmental_factors": "", "cracks": [], "recommendations": [],
-            "monitoring_plan": "", "professional_consultation_required": True, "notes": ""
+            "summary": f"تم اكتشاف {len(final)} ضرر في السطح. يُنصح بالفحص الميداني.",
+            "overall_severity": overall,
+            "overall_confidence": 65,
+            "material_type": "غير محدد",
+            "surface_condition": "يوجد أضرار تستوجب الفحص",
+            "environmental_factors": "",
+            "cracks": [],
+            "recommendations": [{
+                "priority": 1,
+                "action": "فحص ميداني عاجل",
+                "timeline": "خلال أسبوع",
+                "estimated_cost_level": "متوسط",
+                "details": "مراجعة مهندس إنشائي لتقييم الأضرار المكتشفة"
+            }],
+            "monitoring_plan": "متابعة الأضرار شهرياً",
+            "professional_consultation_required": True,
+            "notes": ""
         }
 
     analysis["total_cracks_detected"] = total
     analysis["_detection_info"] = {"gemini_detected": total}
 
-    # مزامنة الـ bbox من الكشف إلى التحليل مع تطبيق الإصلاح
+    # مزامنة الـ bbox المُصحَّح دائماً
     if analysis.get("cracks"):
         for i, crack in enumerate(analysis["cracks"]):
             if i < len(final):
-                crack["bbox"] = final[i]["bbox"]  # استخدم bbox المُصحَّح دائماً
+                crack["bbox"] = final[i]["bbox"]
             crack["id"] = i + 1
     else:
         analysis["cracks"] = [
-            {"id": d["id"], "bbox": d["bbox"],
-             "type": d.get("rough_type", "شرخ"), "category": "structural",
-             "is_structural": True, "estimated_width_mm": "غير محدد",
-             "estimated_length_cm": "غير محدد", "depth_assessment": "غير محدد",
-             "severity": d.get("rough_severity", "MEDIUM"),
-             "confidence": int(d.get("_conf", 0.7) * 100),
-             "description": "تم الكشف بواسطة الذكاء الاصطناعي",
-             "cause_analysis": "يتطلب فحصاً ميدانياً",
-             "progression_risk": "متوسط", "immediate_action": "فحص ميداني"}
+            {
+                "id": d["id"],
+                "bbox": d["bbox"],
+                "type": d.get("damage_type", "شرخ"),
+                "damage_type": d.get("damage_type", "STRUCTURAL_CRACK"),
+                "category": "surface" if d.get("damage_type") in ["PAINT_PEELING", "SURFACE_CRACK"] else "structural",
+                "is_structural": d.get("damage_type") not in ["PAINT_PEELING", "SURFACE_CRACK"],
+                "estimated_width_mm": "غير محدد",
+                "estimated_length_cm": "غير محدد",
+                "depth_assessment": "غير محدد",
+                "severity": d.get("rough_severity", "MEDIUM"),
+                "confidence": int(d.get("_conf", 0.7) * 100),
+                "description": "تم الكشف بواسطة الذكاء الاصطناعي",
+                "cause_analysis": "يتطلب فحصاً ميدانياً",
+                "progression_risk": "متوسط",
+                "immediate_action": "فحص ميداني"
+            }
             for d in final
         ]
 
@@ -319,11 +439,11 @@ def detect_and_analyze(image_base64, img_width, img_height):
 def generate_dashboard_recommendations(records_summary):
     client = _get_client()
     prompt = (
-        "Based on these crack records give maintenance recommendations in Arabic.\n"
+        "Based on these crack and damage records give maintenance recommendations in Arabic.\n"
         "Return ONLY JSON no markdown:\n"
-        '{"overall_assessment":"تقييم","priority_actions":["إجراء"],'
-        '"maintenance_schedule":"الجدول","budget_estimate":"متوسط",'
-        '"risk_areas":["منطقة"],"preventive_measures":["إجراء وقائي"]}\n\n'
+        '{"overall_assessment":"تقييم شامل","priority_actions":["إجراء 1","إجراء 2"],'
+        '"maintenance_schedule":"جدول الصيانة","budget_estimate":"متوسط",'
+        '"risk_areas":["منطقة خطر"],"preventive_measures":["إجراء وقائي"]}\n\n'
         f"Records:\n{records_summary}\n\nJSON only:"
     )
     try:
