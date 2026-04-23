@@ -179,7 +179,7 @@ def draw_ai_detections(image_np, cracks):
             continue
 
         # ← تحسين الـ bbox بمعالجة الصورة
-        bbox = refine_bbox(image_np, raw_bbox, expand=0.15)
+        bbox = refine_bbox(image_np, raw_bbox, expand=0.35)
 
         nx = float(bbox["x"]);     ny = float(bbox["y"])
         nw = float(bbox["width"]); nh = float(bbox["height"])
