@@ -13,7 +13,7 @@ from groq import Groq
 # ─────────────────────────────────────────────
 
 GROQ_MODEL       = "meta-llama/llama-4-scout-17b-16e-instruct"
-ROBOFLOW_MODEL   = "crack-detection-y5kyg-3ywwl"
+ROBOFLOW_MODEL   = "crack-detection-y5kyg-3ywwl/1"
 ROBOFLOW_VERSION = 1
 
 # ─────────────────────────────────────────────
