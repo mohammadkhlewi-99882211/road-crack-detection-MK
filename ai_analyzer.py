@@ -13,7 +13,7 @@ from groq import Groq
 # ─────────────────────────────────────────────
 
 GROQ_MODEL       = "meta-llama/llama-4-scout-17b-16e-instruct"
-ROBOFLOW_MODEL   = "crack-vudec-v04jc"
+ROBOFLOW_MODEL   = "crack-moovo-0ujw8"
 ROBOFLOW_VERSION = 1
 # ─────────────────────────────────────────────
 #  Clients
