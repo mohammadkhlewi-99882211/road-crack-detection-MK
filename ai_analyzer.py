@@ -13,8 +13,11 @@ from groq import Groq
 # ─────────────────────────────────────────────
 
 GROQ_MODEL       = "meta-llama/llama-4-scout-17b-16e-instruct"
-ROBOFLOW_MODEL   = "crack-moovo-0ujw8"
-ROBOFLOW_VERSION = 1
+ROBOFLOW_MODELS = [
+    {"model": "crack-moovo-0ujw8",       "version": 1},  
+    {"model": "crack-vudec-v04jc",       "version": 1},  
+    {"model": "crack-detection-y5kyg-3ywwl", "version": 1},  
+]
 # ─────────────────────────────────────────────
 #  Clients
 # ─────────────────────────────────────────────
