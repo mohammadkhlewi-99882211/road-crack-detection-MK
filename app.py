@@ -13,6 +13,9 @@ from crack_detector import draw_ai_detections, image_to_base64, resize_for_api
 from ai_analyzer import detect_and_analyze, generate_dashboard_recommendations
 from database import save_record, get_all_records, get_record, delete_record, get_statistics
 
+# هون الواجهة دكتور ورح تلاقي ببداية كل فقرة شو بتعالج بالضبط
+
+# استخدمت هون مكتبة Streamlit لانو خبرت حضرتك انو ما نزلت مكتبات على جهازي وايضا استعنت ب css
 st.set_page_config(
     page_title="CrackVision AI — محمد خليوي",
     page_icon="🏗",
@@ -195,7 +198,7 @@ def sev_badge(severity):
 
 # ─────────────────────────────────────────────
 #  Sidebar
-# ─────────────────────────────────────────────
+# ─────────
 
 def render_sidebar():
     with st.sidebar:
@@ -243,7 +246,7 @@ def render_sidebar():
 
 # ─────────────────────────────────────────────
 #  Analysis Page
-# ─────────────────────────────────────────────
+# ...............
 
 def render_analysis_page():
     st.markdown("""
@@ -473,7 +476,6 @@ def render_analysis_page():
             st.success(f"✅ تم الحفظ بنجاح! (رقم السجل: {record_id})")
 
 
-# ─────────────────────────────────────────────
 #  History Page
 # ─────────────────────────────────────────────
 
@@ -555,9 +557,9 @@ def render_history_page():
                 st.rerun()
 
 
-# ─────────────────────────────────────────────
+# ───────────────────────────────────────
 #  Dashboard Page
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────...................
 
 def render_dashboard_page():
     st.markdown("""
@@ -771,9 +773,9 @@ def render_dashboard_page():
                     st.markdown(f"- {m}")
 
 
-# ─────────────────────────────────────────────
+# .......................................
 #  Main
-# ─────────────────────────────────────────────
+# ........................................
 
 def main():
     page = render_sidebar()
