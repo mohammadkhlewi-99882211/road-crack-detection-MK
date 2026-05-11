@@ -6,6 +6,12 @@ from datetime import datetime
 
 DB_PATH = "data/crack_analysis.db"
 
+"""
+هون بلشنا نستخدم
+SQLite
+مشان عملية الأرشفة وحفظ السجلات
+واكيد فيها رح يكون دوال مشان الترتيب والاسترجاع والداشبورد
+"""
 
 def get_db():
     os.makedirs("data", exist_ok=True)
